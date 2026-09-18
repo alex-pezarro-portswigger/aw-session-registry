@@ -1,0 +1,23 @@
+{
+  "name": "aw-peer-messaging",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "1-to-1 messages between Agent Wrangler sessions in the same repo, relayed by the session registry. Every inbound message waits for you to approve it before the agent sees it.",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "wranglerExtension": {
+    "id": "peer-messaging",
+    "label": "Peer messaging",
+    "description": "1-to-1 messages between Agent Wrangler sessions in the same repo, relayed by the session registry. Every inbound message waits for you to approve it before the agent sees it.",
+    "author": "Alex Pezarro <alex.pezarro@portswigger.net>",
+    "homepage": "https://github.com/portswigger-apps/aw-peer-messaging",
+    "requires": ["deliver", "sessions:read", "board:rebuild", "board:broadcast"]
+  }
+}

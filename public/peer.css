@@ -1,0 +1,96 @@
+/* Loaded as a <link> BEFORE the client module imports, and removed again on
+ * unload and on a failed import (public/extensions.js) — so no rule outlives
+ * the extension and starts styling something the core still draws.
+ *
+ * Every selector is under a single `.peer-` prefix, and nothing here styles a
+ * core element, a core class or a bare tag. The theme tokens are the board's
+ * own (public/styles.css `:root`), so this follows a theme switch and the
+ * light/dark flip with no work: hard-coded colours would be the one thing that
+ * looked wrong in half the themes.
+ */
+
+.peer-panel { display: flex; flex-direction: column; gap: 10px; }
+.peer-panel:empty { display: none; }
+
+.peer-head {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  text-transform: uppercase; color: var(--fg-muted);
+}
+.peer-subhead { font-size: 11px; font-weight: 600; color: var(--fg-muted); margin-top: 4px; }
+
+.peer-note { margin: 0; font-size: 12px; color: var(--fg-muted); }
+.peer-note.peer-warn { color: var(--warn-fg); }
+.peer-note.peer-ok { color: var(--fg); }
+
+/* One waiting message. Amber-edged: something is being asked of the reader,
+ * and it is not destructive — the same role --warn carries elsewhere. */
+.peer-msg {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px; border: 1px solid var(--warn); border-left-width: 3px;
+  border-radius: 6px; background: var(--surface-2);
+}
+
+.peer-msg-from { font-size: 13px; }
+.peer-from-name { font-weight: 600; color: var(--fg); }
+/* "self-reported": the relay echoes whatever a sender asserted and verifies
+ * none of it, so the qualifier is deliberately not styled away to nothing. */
+.peer-claim { font-size: 11px; color: var(--fg-subtle); }
+
+.peer-msg-meta { font-size: 11px; color: var(--fg-muted); }
+.peer-handle { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.peer-repo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.peer-sep { color: var(--border); }
+
+/* Capped scroll box: a 4096-character body must not push the rest of the panel
+ * off the screen. */
+.peer-msg-body {
+  max-height: 180px; overflow: auto;
+  padding: 8px; border-radius: 5px;
+  background: var(--field-bg); border: 1px solid var(--border-muted);
+}
+.peer-msg-text {
+  margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.45; color: var(--fg);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.peer-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.peer-btn {
+  font: inherit; font-size: 12px; padding: 4px 9px; cursor: pointer;
+  background: var(--surface-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 5px;
+}
+.peer-btn:hover:not(:disabled) { border-color: var(--fg-subtle); }
+.peer-btn:disabled { opacity: 0.6; cursor: default; }
+.peer-btn-ok { border-color: var(--accent); color: var(--accent); }
+.peer-btn-ok:hover:not(:disabled) { background: var(--accent); color: var(--accent-fg); }
+/* Block is the destructive one, so it is the only red button here. */
+.peer-btn-danger { color: var(--danger-strong); border-color: var(--danger-border); }
+.peer-btn-danger:hover:not(:disabled) { background: var(--danger-bg); }
+
+/* The auto-allow consequence, stated in the UI rather than hidden in a
+ * tooltip: a pre-approved message pastes at the composer's cursor. */
+.peer-hint { margin: 0; font-size: 11px; line-height: 1.4; color: var(--fg-subtle); }
+
+.peer-channels { display: flex; flex-direction: column; gap: 6px; }
+.peer-channel {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px; border: 1px solid var(--border-muted); border-radius: 6px;
+}
+.peer-channel-who { font-size: 12px; }
+.peer-channel-state { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11px; color: var(--fg-muted); }
+.peer-tag { padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+.peer-tag-open { background: var(--pill-working-bg); color: var(--fg); }
+.peer-tag-blocked { background: var(--danger-bg); color: var(--danger-strong); }
+.peer-last, .peer-seen { color: var(--fg-subtle); }
+
+/* The card pill, in the chip row (.card-meta-ext). Amber while something is
+ * waiting for a human; a quiet marker when a peer is allowed through without
+ * one; nothing at all otherwise, which is the common case. */
+.peer-pill { font-size: 11px; line-height: 1; }
+.peer-pill:empty { display: none; }
+.peer-pill-waiting {
+  padding: 1px 5px; border-radius: 9px;
+  background: var(--warn); color: var(--bar-on); font-weight: 600;
+}
+.peer-pill-open { padding: 1px 4px; color: var(--fg-subtle); }

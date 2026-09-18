@@ -1,0 +1,244 @@
+# aw-peer-messaging
+
+An Agent Wrangler extension: 1-to-1 messages between sessions working in the
+same repo, relayed by the [session registry](https://github.com/portswigger-apps/cod-session-registry).
+
+**Every inbound message waits on its card for you to approve it before the agent
+sees it**, unless you have explicitly allowed that one peer for that one card.
+
+---
+
+## Read this before you install it
+
+**An extension runs in-process with full access to this machine.** The
+capability list on the consent modal says what this extension *asked the
+wrangler for*; nothing stops its code — or `zod`'s, or any of its dependencies'
+— from doing more. `npm ci --ignore-scripts` is a mitigation, not a boundary:
+it stops install-time lifecycle hooks only, and dependency code runs in-process
+on first import. Installing this is as much trust as `npm install`-ing a package
+into the wrangler itself. The consent modal's own wording is the canonical
+statement of this and nothing here softens it.
+
+**Sender identity is echoed, not verified.** The relay carries whatever a
+sending board asserted about itself and checks none of it. The approval card
+therefore labels "from" as `self-reported`. The two things the board *can*
+vouch for are the handle it drained and the repo it asked about, which is why
+the frame the agent sees names both.
+
+**The registry has no authentication.** Its only gate is an ingress CIDR
+allowlist. Anything that can reach it can read every handle published there and
+send to any of them. The registry URL is not a credential and is not stored as
+one.
+
+---
+
+## What it does
+
+- Publishes each live card's **messaging handle** (its card id) to the registry,
+  so peers in the same repo can address it.
+- Gives an agent two MCP tools: `list_peer_sessions` and `send_peer_message`.
+- Drains inbound messages on a 15-second sweep, stores them, and **acks the
+  relay only after they are on disk**.
+- Puts every unapproved message behind a click on the card: **Allow once ·
+  Allow all from this session · Deny · Block**.
+
+### The firebreak, stated precisely
+
+The sweep writes pending inbound to this extension's own store and acks the
+registry. It calls `host.deliver` — the only route into an agent's context —
+**only** when an explicit prior human approval already exists for that exact
+`(card, peer handle)` pair. That is what "Allow all from this session" means,
+and nothing else.
+
+Every other inbound message waits for a click. Unapproved text lives in the
+store and on the approval card and **never** in agent context: there is no held
+or blurred preview of it, no summary of it, and no count-based nudge into the
+pane. A denied message leaves no archive anywhere — that is the point.
+
+---
+
+## Install
+
+Through the Extensions tab, by git URL. A lockfile is committed, which the
+install flow requires (it refuses a repo without one *before* showing you the
+disclosure, because an unpinned dependency set cannot be disclosed honestly).
+
+It arrives **switched off**: it reaches a network host, so it has to be chosen
+rather than inherited. Turn it on and set the registry URL from the cog on its
+row.
+
+Requires a wrangler serving host API **`^1.2.0`** — 1.1.0 for `host.settings`,
+1.2.0 for the client-side `onMessage` seam the panel uses for its live
+confirmations. An older wrangler refuses to load it rather than dropping those
+frames silently.
+
+### Settings
+
+| Setting | What it does |
+|---|---|
+| **Session registry URL** | Where to relay through. Unset, the extension is **completely inert**: it publishes nothing, fetches nothing and delivers nothing (one log line per process saying so). |
+| **How often to check for messages** | Seconds. **15 is the floor and the granularity** — the check is wired to a fixed 15-second timer, so a larger number makes it *less* frequent and anything at or below 15 means every time. |
+
+The 15-second floor is not a soft target: `everyMs` is fixed when the manifest
+is validated and `activateExtension` builds the timer from it, so this setting
+can only coarsen the cadence, never refine it.
+
+---
+
+## Things it does that you should know about
+
+### "Allow all" can paste into a half-typed draft
+
+`host.deliver` pastes at the composer's cursor, and the mid-prompt hold that
+the wrangler's own automated nudges use **is not wired to that seam** —
+`server/ext-deliver.js` says so itself, because nothing at that seam can tell an
+addressed message from an automated one.
+
+For the human-approved path that is fine: someone has just clicked, so the
+delivery genuinely is addressed. For **auto-allow** it is not. A pre-approved
+message arriving off the sweep can splice itself into something you are part-way
+through typing. That is precisely what opting in buys. It is per-pair, off by
+default, and the button says so.
+
+If this turns out to matter, the fix is a core one (a deferral-aware `deliver`
+variant), not something this extension can do.
+
+### Two registry rows for one piece of work
+
+A Claude Code hook may already hold a registry row for the same work, keyed on
+the **conversation** id. The row this extension publishes is keyed on the
+**card** id, and that is the *addressable* one — it is what `list_peer_sessions`
+returns and what a message can be sent to.
+
+Two rows for one piece of work is the price of the card id being the only stable
+handle the wrangler owns. The conversation id is deliberately not available to an
+extension at all: `host-api/project.js` withholds it precisely because it is
+`--resume`-able, which would reach a conversation outside the board's lifecycle.
+
+### A wrangler that is off for a day loses messages
+
+Unacked messages expire on the registry after its unacked TTL (6 hours by
+default). At a 15-second sweep that is not close — but a wrangler that is simply
+*not running* for a day will find those messages gone.
+
+That is intended. Nobody wants day-old peer chatter pasted into a fresh session.
+
+### Uninstalling does not delete your data
+
+The state file is:
+
+```
+<DATA_DIR>/peer-messaging/state.json
+```
+
+…which is `~/.agent-wrangler/peer-messaging/state.json` unless `AW_DATA_DIR` is
+set. It holds your approvals, the log of what was delivered, and **any messages
+still waiting for approval, bodies included**.
+
+An uninstall removes the extension's directory and its provenance record but
+**not** this file, because the wrangler does not know where an extension keeps
+its data — a store's file is chosen by the extension's own factory and there is
+no wrangler-owned per-extension data dir to sweep. Delete it by hand if you want
+it gone. (An explicit purge is a core feature and is deferred there.)
+
+Uninstall also deregisters the row, its tools, its handlers and its asset route
+at once, but still asks for a restart: Node cannot unload a module, so the old
+code is resident until the process exits.
+
+---
+
+## How it hangs together
+
+| File | Job |
+|---|---|
+| `index.js` | The manifest. Imports from `lib/`; **nothing in `lib/` or `public/` may import it back** (see below). |
+| `lib/store.js` | `PeerMessageStore`. Synchronous mutators, persistence as a side effect. |
+| `lib/sweep.js` | The `postmaster` sweep: drain → persist → ack → auto-deliver the pre-approved. |
+| `lib/registry.js` | The HTTP client. Every function returns `{ok, …}` and never throws. |
+| `lib/repo-key.js` | `<owner>/<repo>`, reimplementing the registry's own Go normalisation. |
+| `lib/framing.js` | The `[peer message · untrusted · …]` frame and its marker escaping. |
+| `lib/hooks.js` | Handle publication (non-blocking) and archive/purge cleanup. |
+| `lib/tools.js` | `send_peer_message`, `list_peer_sessions`. |
+| `lib/handlers.js` | The six control handlers behind the buttons. |
+| `lib/graph.js` | The `graph.peerMessaging` contributor. |
+| `public/client.js` | The panel and the card pill. Every peer string via `textContent`. |
+
+### Caps
+
+| Cap | Value | Why |
+|---|---|---|
+| Pending per card | 50 | Over it, a message is dropped **and acked** — the relay's drain is non-destructive, so leaving it unacked re-delivers it every sweep for ever. |
+| Body | 4096 chars | Matches the relay's own cap, so nothing larger is ever stored. |
+| Seen ring per card | 200 | What makes the non-destructive drain idempotent across a crash between persist and ack. Comfortably over the relay's per-target cap of 100. |
+| Thread per peer | 50 | A convenience log, not the record; oldest falls off. |
+
+### Three rules a contributor will trip over
+
+1. **`onDispatch` and `onResume` must not return their network promise.** The
+   core `await`s session hooks — inside `dispatch()` and `_doResume()` — so a
+   returned promise adds the full 5-second fetch timeout to *every dispatch and
+   every resume on the board*, worst of all when the registry is down. They fire
+   the POST, attach a `.catch`, and return synchronously. The sweep's
+   re-assert is what makes a dropped publication self-healing.
+2. **No file under `lib/` or `public/` may import `../index.js`.** The
+   wrangler's `FORBIDDEN_IMPORTS` scan matches that *shape*, not the intent, and
+   quarantines the whole extension at discovery with a reason about server core
+   modules. The dependency direction is one-way. `test/manifest.test.js` asserts
+   it, and imports the manifest dynamically for the same reason (see the finding
+   below).
+3. **Nothing may log or throw on the graph tick.** `lib/graph.js` reads the
+   in-memory store and two module-level values and does nothing else — no
+   `fetch`, no `fs`, no `git`, and deliberately not `host.sessions.list()`.
+
+---
+
+## Findings against the extensions API
+
+This is the first real manifest written against the Agent Wrangler extensions
+API, so these are recorded rather than quietly worked around.
+
+- **The import scan covers an extension's own test files.**
+  `importViolation` walks every `.js` under the installed tree except
+  `node_modules` and dot-directories, and an install is a `git clone` — so
+  `test/` is on disk and is scanned. One of its patterns is
+  `from '../index.js'`, which is exactly what a manifest self-check test
+  naturally writes, so the most obvious test in the repo would quarantine the
+  extension. `test/manifest.test.js` therefore uses a dynamic import, which the
+  scan does not match. The fix belongs in `ownJsFiles`.
+- **`board:broadcast` reached nowhere before host API 1.2.0.** The façade put an
+  `{type:'ext:<id>', …}` frame on the control socket, but `app.js`'s ws ladder
+  had no `ext:` branch and the client api had no inbound seam, so the frame was
+  silently dropped. Landed as the `onMessage` seam, which is why this manifest
+  declares `^1.2.0`.
+- **A store factory gets `{id, log}` and nothing else**, where `id` is the
+  **store name**, not the extension id. That is the API's rule rather than an
+  oversight (factories run before `rebuild`/`broadcast`/`deliver` exist), but it
+  means a store must resolve its own data dir and cannot be configured by a
+  setting — hence the fixed state-file path above.
+- **JavaScript's `new URL` is not a drop-in for Go's `url.Parse`** when
+  reimplementing the registry's repo-key normalisation: it applies RFC 3986 path
+  normalisation, so `https://host/../../etc/passwd` has a `pathname` of
+  `/etc/passwd` and the traversal check can never fire. `lib/repo-key.js`
+  extracts the path by hand for that reason, and the shared case table in
+  `test/repo-key.test.js` is what caught it. Not an AW finding, but the same
+  class of problem: a key mismatch between the two halves fails *silently* —
+  the drain simply finds nothing, for ever.
+
+---
+
+## Development
+
+```bash
+npm ci
+npm test
+```
+
+The suite is `node:test`, no runner and no build. The network is a stubbed
+`globalThis.fetch`, the DOM is a hand-rolled stub in the style of the board's
+own `public/` tests, and `git` is injected at a module seam.
+
+While the registry's **batched** drain/ack is still in flight, set
+`AW_PEER_MESSAGING_PER_HANDLE=1` to use the per-handle endpoints instead. That
+is one request per live session per sweep — the cost the batched form exists to
+remove — so it is a bridge, not a mode. The flag and every branch behind it come
+out when the batched endpoints ship.
