@@ -307,6 +307,33 @@ test('the re-assert runs on its OWN slow clock, not once per live card per tick'
   assert.equal(h.calls.filter((c) => c.includes('/note')).length, 4);
 });
 
+// Found in verification: the registry's ledger is in memory, so a restart
+// empties it — and the re-assert's own 5-minute clock left every card
+// unfindable for up to five minutes after the service came back.
+test('coming back up republishes on the NEXT tick, not five minutes later', async () => {
+  const h = harness();
+  h.stub(() => ({ json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  const afterFirst = h.calls.filter((c) => c.includes('/note')).length;
+  assert.equal(afterFirst, 1);
+
+  h.stub(() => new Error('ECONNREFUSED'));
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  h.stub(() => ({ json: { messages: [] } }));
+  // The tick that SEES it back does not republish (the stamp is cleared at the
+  // end of it); the one after does — one sweep, not REPUBLISH_MS.
+  await postmaster({ host: h.host, now: 2 * SWEEP_MS, repoKey: h.repoKey });
+  await postmaster({ host: h.host, now: 3 * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 2);
+});
+
+test('a steady-up registry still does NOT republish per tick', async () => {
+  const h = harness();
+  h.stub(() => ({ json: { messages: [] } }));
+  for (let i = 0; i < 6; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 1);
+});
+
 // ── The sweep must never throw: a throwing sweep is logged EVERY tick ────────
 
 test('a 500 from every endpoint is reported once and does not throw', async () => {

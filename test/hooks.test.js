@@ -119,7 +119,8 @@ test('archive drops pending and every standing approval, and rebuilds', () => {
   h.store.receive('card-1', { id: 'a', fromHandle: 'p', body: 'x' });
   h.store.approve('card-1', 'a', { allowAll: true, mode: 'live' });
   h.store.receive('card-1', { id: 'b', fromHandle: 'p', body: 'y' });
-  onArchive({ sessionId: 'card-1', host: h.host });
+  okFetch(h.calls);
+  onArchive({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
   assert.deepEqual(h.store.pendingFor('card-1'), [], 'unapproved text did not outlive the session');
   assert.equal(h.store.isAutoAllowed('card-1', 'p'), false);
   assert.equal(h.store.threadFor('card-1', 'p').length, 1, 'the log of what did happen survived');
@@ -137,16 +138,50 @@ test('purge removes everything for the card', () => {
   assert.equal(h.rebuilds(), 1);
 });
 
+// Found in verification: without this, an archived card kept its handle on the
+// registry, peers were still offered it by list_peer_sessions, and a send to it
+// ended up pending on a card nobody was looking at — with no receipts to say so.
+test('archive CLEARS the handle on the registry, with an empty string (nil would leave it)', async () => {
+  const h = harness();
+  okFetch(h.calls);
+  onArchive({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, `${BASE}/v1/sessions/card-1/note`);
+  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', messagingHandle: '', origin: 'local' });
+  // finishedAt is NOT touched: closing out a ledger entry belongs to the
+  // registry's own close-out endpoint, not to this extension.
+  assert.equal('finishedAt' in h.calls[0].body, false);
+});
+
+test('archive returns undefined — the core awaits it, so the unpublish is fire-and-forget', () => {
+  const h = harness();
+  hangingFetch(h.calls);
+  assert.equal(onArchive({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host }), undefined);
+});
+
+// onPurge's payload is {sessionId} alone — no entry, so no cwd, so no repo key.
+// A purge always follows an archive, which has already cleared the handle.
+test('purge does not try to reach the registry at all', async () => {
+  const h = harness();
+  okFetch(h.calls);
+  onPurge({ sessionId: 'card-1', host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(h.calls, []);
+});
+
 test('archive and purge of a card with nothing stored do not rebuild for nothing', () => {
   const h = harness();
-  onArchive({ sessionId: 'nobody', host: h.host });
+  okFetch(h.calls);
+  onArchive({ sessionId: 'nobody', entry: { cwd: '/w/app' }, host: h.host });
   onPurge({ sessionId: 'nobody', host: h.host });
   assert.equal(h.rebuilds(), 0);
 });
 
 test('archive and purge are synchronous — the core awaits them too', () => {
   const h = harness();
+  okFetch(h.calls);
   h.store.receive('card-1', { id: 'a', fromHandle: 'p', body: 'x' });
-  assert.equal(onArchive({ sessionId: 'card-1', host: h.host }), undefined);
+  assert.equal(onArchive({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host }), undefined);
   assert.equal(onPurge({ sessionId: 'card-1', host: h.host }), undefined);
 });

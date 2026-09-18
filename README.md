@@ -123,6 +123,22 @@ default). At a 15-second sweep that is not close — but a wrangler that is simp
 
 That is intended. Nobody wants day-old peer chatter pasted into a fresh session.
 
+### An archived card stops being addressable
+
+`onArchive` clears the card's **messaging handle** on the registry — a non-nil
+empty string, which is what clears a stored value where nil leaves it alone — so
+peers stop being offered a card that can no longer receive anything.
+
+It deliberately does **not** touch `finishedAt`: closing out a ledger entry
+belongs to the registry's own close-out endpoint and the hooks that own it. This
+extension publishes a handle; it does not manage an entry's lifecycle.
+
+Without this, `list_peer_sessions` kept offering archived cards, a send to one
+was accepted by the relay and drained by the recipient board, and then refused
+by `host.deliver` (which will not resurrect a card that left the board on
+purpose) — so the message sat pending on a card nobody was looking at, with no
+receipts to say so. Found in verification.
+
 ### Uninstalling does not delete your data
 
 The state file is:
@@ -146,6 +162,19 @@ at once, but still asks for a restart: Node cannot unload a module, so the old
 code is resident until the process exits.
 
 ---
+
+### What happens when the registry restarts
+
+Its ledger is in memory by default, so a restart empties it. The sweep notices
+the up transition and republishes every live card's handle on the next tick
+rather than waiting for its own five-minute re-assert clock — so peers can find
+each other again within about 15 seconds, not five minutes.
+
+The re-assert is on that slow clock at all because it is one POST **per live
+card**, where a drain is one request per repo: putting it on the 15-second tick
+would reintroduce exactly the trickle that the batched drain exists to remove.
+It is a safety net for a note the dispatch/resume hooks dropped, not the
+mechanism.
 
 ## How it hangs together
 
