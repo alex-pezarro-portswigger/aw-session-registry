@@ -7,6 +7,7 @@ import { postmaster, _resetSweepState, SWEEP_MS, REPUBLISH_MS } from '../lib/swe
 import { PeerMessageStore, MAX_PENDING_PER_SESSION } from '../lib/store.js';
 import { setPerHandleFallback } from '../lib/registry.js';
 import { _resetRepoKeyCache } from '../lib/repo-key.js';
+import { directorySnapshot } from '../lib/directory.js';
 
 const BASE = 'https://registry.example.test';
 const realFetch = globalThis.fetch;
@@ -79,12 +80,15 @@ test('no registry URL is WHOLLY inert, with one line per process and never per t
   assert.equal(h.rebuilds(), 0);
 });
 
-test('a card with no resolvable repo has no peers and costs no request', async () => {
+// The DIRECTORY is cross-repo, so it is the one thing a board with no
+// repo-resolvable card still fetches: the view wants to see the registry even
+// when this board has nothing in it.
+test('a card with no resolvable repo costs no DRAIN, only the cross-repo directory', async () => {
   const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/tmp/scratch' }] });
   h.stub(() => ({ json: { messages: [] } }));
   await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
-  assert.deepEqual(h.calls, []);
-  assert.equal(h.rebuilds(), 0);
+  assert.deepEqual(h.calls, ['GET /v1/sessions']);
+  assert.equal(h.rebuilds(), 0, 'an empty registry is not a change');
 });
 
 test('an archived session is filtered out even though the projection already excludes it', async () => {
@@ -92,7 +96,7 @@ test('an archived session is filtered out even though the projection already exc
   h.host.sessions.list = () => [{ sessionId: 'card-1', cwd: '/w/app', archived: true }];
   h.stub(() => ({ json: { messages: [] } }));
   await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
-  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.calls.filter((c) => c !== 'GET /v1/sessions'), []);
 });
 
 // ── Drain ────────────────────────────────────────────────────────────────────
@@ -351,4 +355,82 @@ test('a failed ack does not throw, and the message stays stored for the retry', 
   await assert.doesNotReject(() => postmaster({ host: h.host, now: 0, repoKey: h.repoKey }));
   assert.equal(h.store.pendingFor('card-1').length, 1);
   assert.match(h.logs[0], /unreachable/);
+});
+
+// ── The cross-repo directory (the Session registry view) ────────────────────
+
+function dirEntry(over = {}) {
+  return {
+    sessionId: 'sess-1', origin: 'local', intent: 'wiring the drain', detail: '',
+    branch: 'main', startedAt: '2026-09-20T09:00:00Z', finishedAt: null,
+    messagingHandle: 'peer-card', owner: 'Sam Rivera', ...over,
+  };
+}
+
+// Answers the drain like every other stub here, and the directory with a real
+// payload.
+function withDirectory(repos) {
+  return (target) => (target.includes('/v1/sessions') ? { json: { repos, since: '24h0m0s' } } : { json: { messages: [] } });
+}
+
+test('the directory is fetched once per real drain tick, even with no repo-resolvable cards', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/tmp/scratch' }] });
+  h.stub(withDirectory({ 'acme/app': [dirEntry()] }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c === 'GET /v1/sessions').length, 2, 'one per tick, not one per repo');
+  assert.deepEqual(Object.keys(directorySnapshot().repos), ['acme/app']);
+});
+
+test('pollSeconds gates the directory fetch too', async () => {
+  const h = harness({ pollSeconds: 45 });
+  h.stub(withDirectory({}));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  await postmaster({ host: h.host, now: 2 * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c === 'GET /v1/sessions').length, 1);
+});
+
+// The same guarantee the drain has: a rebuild ONLY if something moved.
+test('a changed directory rebuilds; an identical one does not', async () => {
+  const h = harness();
+  h.stub(withDirectory({ 'acme/app': [dirEntry()] }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.rebuilds(), 1);
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.rebuilds(), 1, 'the same rows on the 15s tick are not a board change');
+  h.stub(withDirectory({ 'acme/app': [dirEntry(), dirEntry({ sessionId: 'sess-2' })] }));
+  await postmaster({ host: h.host, now: 2 * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.rebuilds(), 2);
+});
+
+test('a directory failure is a reachability transition, logged once over four ticks', async () => {
+  const h = harness();
+  // The drain is fine; only the directory is down. It must still be exactly
+  // one line, because "the registry is unreachable" is a state, not an event.
+  h.stub((target) => (target.includes('/v1/sessions') ? new Error('ECONNREFUSED') : { json: { messages: [] } }));
+  for (let i = 0; i < 4; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /unreachable/);
+});
+
+test('a directory failure after a good fetch keeps the last snapshot for the view', async () => {
+  const h = harness();
+  h.stub(withDirectory({ 'acme/app': [dirEntry()] }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  h.stub((target) => (target.includes('/v1/sessions') ? new Error('ECONNREFUSED') : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  const snap = directorySnapshot();
+  assert.deepEqual(Object.keys(snap.repos), ['acme/app'], 'stale beats blank');
+  assert.equal(snap.fetchedAt, 0, 'and the "as of" is the last SUCCESSFUL fetch');
+  assert.match(snap.error, /ECONNREFUSED/);
+});
+
+// The directory call is after the drain loop, so it cannot get between a
+// persist and its ack.
+test('the directory fetch comes last, after every drain and ack', async () => {
+  const h = harness();
+  h.stub((target) => (target.includes('/v1/sessions') ? { json: { repos: {} } } : { json: { messages: [envelope()], acked: 1 } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.calls.at(-1), 'GET /v1/sessions');
 });

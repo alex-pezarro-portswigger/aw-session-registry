@@ -1,7 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  postNote, listSessions, send, drain, ack,
+  postNote, listSessions, listAllSessions, send, drain, ack,
   setPerHandleFallback, usingPerHandleFallback,
   MAX_HANDLES_PER_DRAIN, MAX_IDS_PER_ACK,
 } from '../lib/registry.js';
@@ -240,5 +240,49 @@ test('acking nothing is a no-op, not a request', async () => {
   stub(() => ({ json: { acked: 0 } }));
   assert.deepEqual(await ack(BASE, 'acme/app', []), { ok: true, acked: 0 });
   assert.deepEqual(await ack(BASE, 'acme/app', [{ id: '' }, null]), { ok: true, acked: 0 });
+  assert.equal(calls.length, 0);
+});
+
+// ── listAllSessions ──────────────────────────────────────────────────────────
+
+test('listAllSessions hits GET /v1/sessions and returns the repo map', async () => {
+  stub(() => ({ json: { repos: { 'acme/app': [{ sessionId: 'a' }] }, since: '24h0m0s' } }));
+  const res = await listAllSessions(BASE);
+  assert.equal(res.ok, true);
+  assert.equal(calls[0].url, `${BASE}/v1/sessions`);
+  assert.equal(calls[0].method, 'GET');
+  assert.deepEqual(calls[0].headers, {}, 'a GET carries no body and so no content-type');
+  assert.equal(calls[0].body, null);
+  assert.deepEqual(res.repos, { 'acme/app': [{ sessionId: 'a' }] });
+});
+
+// The graph tick may not throw, so nothing malformed may reach it.
+test('listAllSessions normalises a missing or non-object repos to an empty map', async () => {
+  for (const json of [{}, { repos: null }, { repos: [] }, { repos: 'nope' }, { repos: 7 }]) {
+    stub(() => ({ json }));
+    assert.deepEqual((await listAllSessions(BASE)).repos, {}, JSON.stringify(json));
+  }
+  stub(() => ({ json: { repos: { 'acme/app': 'not an array', 'acme/other': [{ sessionId: 'b' }] } } }));
+  assert.deepEqual((await listAllSessions(BASE)).repos, { 'acme/app': [], 'acme/other': [{ sessionId: 'b' }] });
+});
+
+test('a network failure from listAllSessions is {ok:false}, never a throw', async () => {
+  stub(() => new Error('ECONNREFUSED'));
+  const res = await listAllSessions(BASE);
+  assert.equal(res.ok, false);
+  assert.match(res.error, /ECONNREFUSED/);
+});
+
+test('a 500 from listAllSessions carries the registry"s own reason and status', async () => {
+  stub(() => ({ status: 500, json: { error: 'list failed' } }));
+  const res = await listAllSessions(BASE);
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 500);
+  assert.match(res.error, /list failed/);
+});
+
+test('an unusable base URL is an error rather than a fetch, here too', async () => {
+  stub(() => ({ json: {} }));
+  assert.equal((await listAllSessions('file:///etc/passwd')).ok, false);
   assert.equal(calls.length, 0);
 });
