@@ -42,6 +42,27 @@ one.
 - Puts every unapproved message behind a click on the card: **Allow once ·
   Allow all from this session · Deny · Block**.
 
+### Session registry view
+
+A top-level board view — its own button on the rail — showing **every repo's
+sessions from the last 24 hours**, not just this board's. It is the registry's
+own dashboard, drawn with the board's theme: the same grouping by repo, the
+same live-then-recently-ended split, and the same wording, down to
+`no end recorded` rather than "still running" (the registry records a start and
+an end and infers nothing between them). Status and repo filters persist across
+a reload.
+
+A card whose messaging handle is a session **on this board** is tagged `this
+board` and clicking it selects that session and returns to the grid. Everything
+else is read-only: there is no button on this view that changes anything,
+anywhere.
+
+What it costs: **one `GET /v1/sessions` per drain tick**, under the same
+`pollSeconds` gate as everything else the sweep does, and a board rebuild only
+when the contents actually changed — an identical fetch redraws nothing. The
+graph tick still does no I/O; the sweep writes `lib/directory.js` and the graph
+reads it.
+
 ### The firebreak, stated precisely
 
 The sweep writes pending inbound to this extension's own store and acks the
@@ -190,7 +211,8 @@ mechanism.
 | `lib/tools.js` | `send_peer_message`, `list_peer_sessions`. |
 | `lib/handlers.js` | The six control handlers behind the buttons. |
 | `lib/graph.js` | The `graph.peerMessaging` contributor. |
-| `public/client.js` | The panel and the card pill. Every peer string via `textContent`. |
+| `lib/directory.js` | The last directory fetch, held for the graph. Pure module state; the sweep writes it, the graph reads it. |
+| `public/client.js` | The panel, the card pill and the Session registry view. Every peer string via `textContent`. |
 
 ### Caps
 
@@ -200,6 +222,7 @@ mechanism.
 | Body | 4096 chars | Matches the relay's own cap, so nothing larger is ever stored. |
 | Seen ring per card | 200 | What makes the non-destructive drain idempotent across a crash between persist and ack. Comfortably over the relay's per-target cap of 100. |
 | Thread per peer | 50 | A convenience log, not the record; oldest falls off. |
+| Registry on the graph | 256KB | Past it, later repos are dropped and `truncated` says so. Separate from the pending-body budget: the two bound different payloads. |
 
 ### Three rules a contributor will trip over
 

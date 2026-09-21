@@ -301,6 +301,411 @@ function channelList(sessionId, channels) {
   return box;
 }
 
+// ── view: the Session registry ───────────────────────────────────────────────
+// ONE host, a top-level board view behind a rail button. It draws the registry
+// dashboard's data (every repo's sessions from the last 24 hours) from
+// `graph.peerMessaging.registry`, which the sweep filled — this file never
+// fetches anything, and neither does the graph tick that feeds it.
+//
+// READ-ONLY. Nothing in here sends a frame, and the one interaction it has is
+// a click on the board's OWN card, which is navigation, not an action.
+
+// The rail icon. `app.js` puts `c.icon` in with innerHTML BY DESIGN, so this
+// is a string constant with no data anywhere in it — the module's own markup,
+// at the module's own trust level. Nothing from the registry may ever reach
+// this constant.
+const DIRECTORY_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" '
+  + 'stroke="currentColor" stroke-width="1.5" stroke-linecap="round">'
+  + '<path d="M2 3.5h3M2 8h3M2 12.5h3M7.5 3.5h6.5M7.5 8h6.5M7.5 12.5h6.5"/></svg>';
+
+const DIR_WINDOW_HOURS = 24; // mirrors the registry's own `uiWindow`.
+const DIR_STATUS_KEY = 'peer-messaging:dir:status';
+const DIR_REPO_KEY = 'peer-messaging:dir:repo';
+
+// Held on mount and cleared on unmount, mirroring `panelApi`. The view is
+// READ-ONLY, so nothing reads it today — it is what a future contribution here
+// would have to go through, and keeping the seam means the lifecycle is
+// already right rather than being retrofitted.
+let directoryApi = null;
+// `undefined` rather than null is the "nothing drawn yet" sentinel: a registry
+// that has never been fetched has a `fetchedAt` of null, and the first render
+// must still happen.
+let lastRenderedAt;
+let lastBoardKey = null;
+
+function store(key, value) {
+  try {
+    globalThis.localStorage.setItem(key, value);
+  } catch {
+    // A private window, a blocked origin, a quota. A filter that does not
+    // persist is a smaller problem than a view that throws.
+  }
+}
+
+function stored(key) {
+  try {
+    return globalThis.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+// The dashboard's own age wording (`humanize.Age`): `<1m`, `Nm`, `Nh`, `Nd`.
+// A SEPARATE function from `ago()` rather than a change to it — the panel's
+// "12s ago" wording and the tests that pin it stay exactly as they were.
+function ageWord(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '0m';
+  if (ms < 60000) return '<1m';
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m`;
+  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h`;
+  return `${Math.floor(ms / 86400000)}d`;
+}
+
+// `humanize.ShortID`: keep 20, and only abbreviate past 24, cutting on code
+// points rather than bytes.
+function shortId(id) {
+  const text = String(id || '');
+  const runes = [...text];
+  return runes.length <= 24 ? text : `${runes.slice(0, 20).join('')}…`;
+}
+
+// `uiOriginWord`: refuses to guess. A plausible-looking wrong origin is worse
+// than an admitted unknown, because a reader uses it to decide whether a
+// peer's tree is on their own disk.
+function originWord(origin) {
+  return origin === 'runner' || origin === 'local' || origin === 'hosted' ? origin : 'unknown-origin';
+}
+
+function stamp(at) {
+  const d = new Date(at);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function registryData(graph) {
+  const p = peerData(graph);
+  const reg = p && p.registry;
+  if (!reg || typeof reg !== 'object') return { repos: {}, fetchedAt: null, error: null, truncated: false };
+  const raw = reg.repos;
+  const repos = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return {
+    repos,
+    fetchedAt: Number.isFinite(reg.fetchedAt) ? reg.fetchedAt : null,
+    error: typeof reg.error === 'string' ? reg.error : null,
+    truncated: Boolean(reg.truncated),
+  };
+}
+
+// The board's own live session ids. `graph.sessions` and nothing else: the
+// handle this extension publishes IS the card id, so an entry whose
+// messagingHandle is in here is a card on this very board.
+function boardSessionIds(graph) {
+  const list = graph && Array.isArray(graph.sessions) ? graph.sessions : [];
+  const ids = new Set();
+  for (const s of list) if (s && typeof s.sessionId === 'string') ids.add(s.sessionId);
+  return ids;
+}
+
+function option(value, label) {
+  const o = el('option', null, label);
+  o.value = value;
+  return o;
+}
+
+const directoryView = {
+  id: 'directory',
+  label: 'Session registry',
+  icon: DIRECTORY_ICON,
+
+  mount(host, api) {
+    directoryApi = api;
+    lastRenderedAt = undefined;
+    lastBoardKey = null;
+
+    const root = el('div', 'peer-dir');
+
+    const head = el('div', 'peer-dir-head');
+    head.appendChild(el('h1', 'peer-dir-title', 'session registry'));
+    head.appendChild(el('p', 'peer-dir-meta', ''));
+    root.appendChild(head);
+
+    root.appendChild(el('div', 'peer-dir-notes'));
+
+    const controls = el('div', 'peer-dir-controls');
+    const statusBox = el('div', 'peer-dir-control');
+    statusBox.appendChild(el('span', 'peer-dir-label', 'status'));
+    const statusSel = el('select', 'peer-dir-status');
+    statusSel.appendChild(option('all', 'all sessions'));
+    statusSel.appendChild(option('live', 'no end recorded'));
+    statusSel.appendChild(option('ended', 'recently ended'));
+    statusBox.appendChild(statusSel);
+    controls.appendChild(statusBox);
+
+    const repoBox = el('div', 'peer-dir-control');
+    repoBox.appendChild(el('span', 'peer-dir-label', 'repo'));
+    const repoSel = el('select', 'peer-dir-repo-filter');
+    repoSel.appendChild(option('', 'all repos'));
+    repoBox.appendChild(repoSel);
+    controls.appendChild(repoBox);
+
+    controls.appendChild(el('span', 'peer-dir-summary', ''));
+    root.appendChild(controls);
+
+    root.appendChild(el('div', 'peer-dir-body'));
+    const nomatch = el('p', 'peer-dir-nomatch', 'Nothing matches this filter. Widen it to see sessions again.');
+    nomatch.hidden = true;
+    root.appendChild(nomatch);
+    root.appendChild(el('p', 'peer-dir-empty', ''));
+
+    // Restored AFTER the options exist, and a stored repo is accepted only if
+    // the current options carry it — the same rule as the dashboard's own
+    // `restore`. Repos come and go, and a dangling selection would hide
+    // everything with no way to tell why.
+    const savedStatus = stored(DIR_STATUS_KEY);
+    if (savedStatus === 'all' || savedStatus === 'live' || savedStatus === 'ended') statusSel.value = savedStatus;
+    statusSel.addEventListener('change', () => {
+      store(DIR_STATUS_KEY, String(statusSel.value || 'all'));
+      applyDirectoryFilters(root);
+    });
+    repoSel.addEventListener('change', () => {
+      store(DIR_REPO_KEY, String(repoSel.value || ''));
+      applyDirectoryFilters(root);
+    });
+
+    host.appendChild(root);
+  },
+
+  update(host, session, graph) {
+    const root = host.querySelector('.peer-dir');
+    if (!root) return;
+    const p = peerData(graph);
+    const notes = root.querySelector('.peer-dir-notes');
+    const body = root.querySelector('.peer-dir-body');
+    const meta = root.querySelector('.peer-dir-meta');
+    const empty = root.querySelector('.peer-dir-empty');
+    if (!notes || !body || !meta || !empty) return;
+
+    // Nowhere to look. The same words as the panel's, because it is the same
+    // state and a second phrasing for it would read as a second problem.
+    if (p && !p.configured) {
+      notes.replaceChildren(el('p', 'peer-note', 'No session registry URL is set, so peer messaging is doing nothing. Set one from the cog on its row in the Extensions tab.'));
+      body.replaceChildren();
+      meta.textContent = '';
+      empty.textContent = '';
+      lastRenderedAt = undefined;
+      lastBoardKey = null;
+      return;
+    }
+
+    const reg = registryData(graph);
+    const noteParts = [];
+    if (p && p.registryUp === false) {
+      // The last snapshot is still drawn below: stale and labelled beats blank.
+      noteParts.push(el('p', 'peer-note peer-warn', 'The session registry is unreachable. Nothing is lost — messages are re-read when it is back.'));
+    }
+    if (reg.truncated) {
+      noteParts.push(el('p', 'peer-note peer-warn', 'There are more sessions than the board will carry at once.'));
+    }
+    notes.replaceChildren(...noteParts);
+
+    const boardIds = boardSessionIds(graph);
+    const boardKey = [...boardIds].sort().join(',');
+    // A fetch that changed nothing, on a board whose cards have not moved,
+    // redraws nothing: the "this board" tag is the only part of a card that
+    // depends on anything outside the snapshot.
+    if (reg.fetchedAt === lastRenderedAt && boardKey === lastBoardKey) return;
+    lastRenderedAt = reg.fetchedAt;
+    lastBoardKey = boardKey;
+
+    renderDirectory(root, reg, boardIds);
+  },
+
+  unmount() {
+    directoryApi = null;
+    lastRenderedAt = undefined;
+    lastBoardKey = null;
+  },
+};
+
+function renderDirectory(root, reg, boardIds) {
+  const body = root.querySelector('.peer-dir-body');
+  const meta = root.querySelector('.peer-dir-meta');
+  const empty = root.querySelector('.peer-dir-empty');
+  const now = Date.now();
+
+  // Most recently active repo first, tie-broken on key — `buildUIPage`'s sort,
+  // and for the same reason: something has to make the order deterministic.
+  const repos = Object.keys(reg.repos)
+    .map((key) => {
+      const entries = Array.isArray(reg.repos[key]) ? reg.repos[key].filter((e) => e && typeof e === 'object') : [];
+      let latest = 0;
+      for (const e of entries) {
+        const t = Date.parse(e.startedAt);
+        if (Number.isFinite(t) && t > latest) latest = t;
+      }
+      return { key, entries, latest };
+    })
+    .filter((r) => r.entries.length)
+    .sort((a, b) => (b.latest - a.latest) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+
+  const count = repos.reduce((n, r) => n + r.entries.length, 0);
+  meta.textContent = `${count} session(s) started in the last ${DIR_WINDOW_HOURS} hours, across ${repos.length} repo(s).`
+    + (reg.fetchedAt == null ? '' : ` As of ${stamp(reg.fetchedAt)}.`);
+
+  const sections = [];
+  for (const repo of repos) {
+    const section = el('section', 'peer-dir-repo');
+    section.dataset.repoKey = repo.key;
+    section.appendChild(el('h2', 'peer-dir-repo-name', repo.key));
+
+    const live = repo.entries.filter((e) => e.finishedAt == null);
+    const ended = repo.entries.filter((e) => e.finishedAt != null);
+
+    if (live.length) {
+      const block = el('div', 'peer-dir-live');
+      block.dataset.block = 'live';
+      for (const e of live) block.appendChild(directoryCard(e, now, boardIds));
+      section.appendChild(block);
+    }
+    if (ended.length) {
+      const heading = el('h3', 'peer-dir-ended-heading', 'recently ended');
+      heading.dataset.block = 'ended';
+      section.appendChild(heading);
+      const block = el('div', 'peer-dir-ended');
+      block.dataset.block = 'ended';
+      for (const e of ended) block.appendChild(directoryCard(e, now, boardIds));
+      section.appendChild(block);
+    }
+    sections.push(section);
+  }
+  body.replaceChildren(...sections);
+
+  if (!repos.length) {
+    empty.textContent = reg.fetchedAt == null
+      ? 'Waiting for the first sweep…'
+      : `No sessions started in the last ${DIR_WINDOW_HOURS} hours. That is an empty registry, not a broken page.`;
+  } else {
+    empty.textContent = '';
+  }
+
+  syncRepoOptions(root, repos.map((r) => r.key));
+  applyDirectoryFilters(root);
+}
+
+// One card. EVERY string on it came off a remote relay by way of the registry
+// and lands via textContent — see the file header. No `dataset.id` anywhere,
+// because settings.js's delegated toggle handler looks a row up by it.
+function directoryCard(entry, now, boardIds) {
+  const card = el('div', 'peer-dir-card');
+
+  const top = el('div', 'peer-dir-top');
+  const intent = String(entry.intent || '');
+  // An empty intent is a placeholder rather than a skip: a session that never
+  // said what it was for is worth seeing as such.
+  top.appendChild(intent
+    ? el('p', 'peer-dir-intent', intent)
+    : el('p', 'peer-dir-intent absent', 'no intent set'));
+  const finished = entry.finishedAt == null ? null : Date.parse(entry.finishedAt);
+  top.appendChild(el('span', 'peer-dir-chip', entry.finishedAt == null
+    ? 'no end recorded'
+    : `ended ${ageWord(now - finished)} ago`));
+  card.appendChild(top);
+
+  const handle = typeof entry.messagingHandle === 'string' ? entry.messagingHandle : '';
+  if (handle) {
+    // Rendered as the call to make, matching the brief's own `SendMessage to
+    // %q` line rather than as a labelled field.
+    card.appendChild(el('p', 'peer-dir-handle', `SendMessage to "${handle}"`));
+  }
+
+  const meta = el('div', 'peer-dir-cardmeta');
+  if (entry.owner) meta.appendChild(el('span', 'peer-dir-owner', entry.owner));
+  if (entry.branch) meta.appendChild(el('span', 'peer-dir-branch', `branch ${entry.branch}`));
+  const started = Date.parse(entry.startedAt);
+  if (Number.isFinite(started)) meta.appendChild(el('span', 'peer-dir-started', `started ${ageWord(now - started)} ago`));
+  meta.appendChild(el('span', 'peer-dir-origin', originWord(entry.origin)));
+  meta.appendChild(el('span', 'peer-dir-shortid', shortId(entry.sessionId)));
+  card.appendChild(meta);
+
+  const detail = String(entry.detail || '');
+  if (detail) {
+    // Native <details>: the newlines are kept by CSS (white-space: pre-wrap),
+    // never by emitting markup around the text.
+    const box = el('details', 'peer-dir-details');
+    box.appendChild(el('summary', 'peer-dir-details-summary', 'detail'));
+    box.appendChild(el('p', 'peer-dir-detail', detail));
+    card.appendChild(box);
+  }
+
+  if (handle && boardIds.has(handle)) {
+    card.className = 'peer-dir-card peer-dir-mine';
+    meta.appendChild(el('span', 'peer-tag', 'this board'));
+    if (typeof card.setAttribute === 'function') card.setAttribute('role', 'link');
+    // CLICK ONLY, and deliberately no tabindex and no keydown: this file's
+    // rule is that Enter never activates anything it draws.
+    card.addEventListener('click', (event) => {
+      // A click on the disclosure triangle is about the detail, not the card.
+      const target = event && event.target;
+      if (target && typeof target.closest === 'function' && target.closest('details')) return;
+      globalThis.location.hash = `#session=${encodeURIComponent(handle)}`;
+    });
+  }
+
+  return card;
+}
+
+// The repo <option>s are rebuilt from the sections that were just drawn, so
+// the dropdown and the page can never drift apart.
+function syncRepoOptions(root, keys) {
+  const sel = root.querySelector('.peer-dir-repo-filter');
+  if (!sel) return;
+  const wanted = stored(DIR_REPO_KEY);
+  const current = String(sel.value || '');
+  const opts = [option('', 'all repos')];
+  for (const key of keys) opts.push(option(key, key));
+  sel.replaceChildren(...opts);
+  // Keep the live choice if it survived, else the stored one if it did, else
+  // fall back to all repos rather than to a selection that hides everything.
+  sel.value = keys.includes(current) ? current : (wanted && keys.includes(wanted) ? wanted : '');
+}
+
+// The dashboard's `apply`, on already-rendered nodes: this hides and unhides,
+// it never rebuilds.
+function applyDirectoryFilters(root) {
+  const body = root.querySelector('.peer-dir-body');
+  const statusSel = root.querySelector('.peer-dir-status');
+  const repoSel = root.querySelector('.peer-dir-repo-filter');
+  const summary = root.querySelector('.peer-dir-summary');
+  const nomatch = root.querySelector('.peer-dir-nomatch');
+  if (!body) return;
+  const status = statusSel ? String(statusSel.value || 'all') : 'all';
+  const repo = repoSel ? String(repoSel.value || '') : '';
+
+  const sections = [...(body.children || [])].filter((n) => n && n.dataset && n.dataset.repoKey != null);
+  let visible = 0;
+  for (const section of sections) {
+    const blocks = [...(section.children || [])].filter((n) => n && n.dataset && n.dataset.block);
+    let anyBlock = false;
+    for (const block of blocks) {
+      const show = status === 'all' || block.dataset.block === status;
+      block.hidden = !show;
+      if (show) anyBlock = true;
+    }
+    const show = anyBlock && (!repo || section.dataset.repoKey === repo);
+    section.hidden = !show;
+    if (show) visible += 1;
+  }
+  if (nomatch) nomatch.hidden = !sections.length || visible > 0;
+  if (summary) {
+    summary.textContent = !sections.length
+      ? ''
+      : (visible === sections.length
+        ? `showing all ${sections.length} repo(s)`
+        : `showing ${visible} of ${sections.length} repo(s)`);
+  }
+}
+
 // `api.send` is bound by slots.apiFor to this extension's OWN registered
 // handler types and FAILS CLOSED — a board that has heard nothing about this
 // extension may send nothing. This contribution does not need to know that; it
@@ -324,5 +729,6 @@ export default {
     });
     slots.register('card.pill', cardPill);
     slots.register('panel.section', panelSection);
+    slots.register('view', directoryView);
   },
 };
