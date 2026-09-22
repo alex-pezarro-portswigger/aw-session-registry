@@ -361,14 +361,6 @@ function ageWord(ms) {
   return `${Math.floor(ms / 86400000)}d`;
 }
 
-// `humanize.ShortID`: keep 20, and only abbreviate past 24, cutting on code
-// points rather than bytes.
-function shortId(id) {
-  const text = String(id || '');
-  const runes = [...text];
-  return runes.length <= 24 ? text : `${runes.slice(0, 20).join('')}…`;
-}
-
 // `uiOriginWord`: refuses to guess. A plausible-looking wrong origin is worse
 // than an admitted unknown, because a reader uses it to decide whether a
 // peer's tree is on their own disk.
@@ -606,26 +598,29 @@ function directoryCard(entry, now, boardIds) {
   top.appendChild(intent
     ? el('p', 'peer-dir-intent', intent)
     : el('p', 'peer-dir-intent absent', 'no intent set'));
+  // Start and end sit together: the two halves of one span of time read as a
+  // pair, and neither is useful without the other.
+  const times = el('div', 'peer-dir-times');
+  const started = Date.parse(entry.startedAt);
+  if (Number.isFinite(started)) times.appendChild(el('span', 'peer-dir-started', `started ${ageWord(now - started)} ago`));
   const finished = entry.finishedAt == null ? null : Date.parse(entry.finishedAt);
-  top.appendChild(el('span', 'peer-dir-chip', entry.finishedAt == null
+  times.appendChild(el('span', 'peer-dir-chip', entry.finishedAt == null
     ? 'no end recorded'
     : `ended ${ageWord(now - finished)} ago`));
+  top.appendChild(times);
   card.appendChild(top);
 
   const handle = typeof entry.messagingHandle === 'string' ? entry.messagingHandle : '';
-  if (handle) {
-    // Rendered as the call to make, matching the brief's own `SendMessage to
-    // %q` line rather than as a labelled field.
-    card.appendChild(el('p', 'peer-dir-handle', `SendMessage to "${handle}"`));
-  }
 
   const meta = el('div', 'peer-dir-cardmeta');
-  if (entry.owner) meta.appendChild(el('span', 'peer-dir-owner', entry.owner));
-  if (entry.branch) meta.appendChild(el('span', 'peer-dir-branch', `branch ${entry.branch}`));
-  const started = Date.parse(entry.startedAt);
-  if (Number.isFinite(started)) meta.appendChild(el('span', 'peer-dir-started', `started ${ageWord(now - started)} ago`));
+  // Labelled, and stated as an absence when there is none: an unattributed
+  // session should not read as one whose author happens to be off-screen.
+  meta.appendChild(entry.owner
+    ? el('span', 'peer-dir-owner', `author ${entry.owner}`)
+    : el('span', 'peer-dir-owner absent', 'no author recorded'));
+  // No "branch" label: a branch name reads as one.
+  if (entry.branch) meta.appendChild(el('span', 'peer-dir-branch', entry.branch));
   meta.appendChild(el('span', 'peer-dir-origin', originWord(entry.origin)));
-  meta.appendChild(el('span', 'peer-dir-shortid', shortId(entry.sessionId)));
   card.appendChild(meta);
 
   const detail = String(entry.detail || '');
