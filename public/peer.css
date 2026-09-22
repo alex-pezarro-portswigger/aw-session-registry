@@ -132,21 +132,21 @@
 .peer-dir-summary { font-size: 0.8rem; color: var(--fg-muted); }
 
 .peer-dir-body { display: flex; flex-direction: column; }
-.peer-dir-repo { padding: 18px 0 4px; border-top: 1px solid var(--border-muted); }
+.peer-dir-repo { padding: 26px 0 10px; border-top: 1px solid var(--border-muted); }
 .peer-dir-repo:first-child { border-top: none; }
 .peer-dir-repo-name {
-  margin: 0 0 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0 0 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.95rem; font-weight: 600;
 }
 .peer-dir-ended-heading {
-  margin: 14px 0 8px; font-size: 11px; font-weight: 600;
+  margin: 20px 0 12px; font-size: 11px; font-weight: 600;
   letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-muted);
 }
-.peer-dir-live, .peer-dir-ended { display: flex; flex-direction: column; gap: 8px; }
+.peer-dir-live, .peer-dir-ended { display: flex; flex-direction: column; gap: 12px; }
 
 .peer-dir-card {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: 7px;
   background: var(--surface);
 }
 /* Accent-edged while there is no recorded end — the dashboard's own signal,
@@ -154,8 +154,11 @@
 .peer-dir-live .peer-dir-card { border-left: 3px solid var(--accent); }
 .peer-dir-ended .peer-dir-card { opacity: 0.6; }
 
-.peer-dir-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; justify-content: space-between; }
-.peer-dir-intent { margin: 0; font-size: 0.9rem; color: var(--fg); }
+.peer-dir-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; justify-content: space-between; }
+.peer-dir-intent { margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--fg); }
+/* Start and end as one group, so the pair stays together when the row wraps. */
+.peer-dir-times { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 11px; color: var(--fg-muted); }
+.peer-dir-started { white-space: nowrap; }
 /* An empty intent is shown as an absence rather than skipped: a session that
  * never said what it was for is worth seeing as such. */
 .peer-dir-intent.absent { font-style: italic; color: var(--fg-subtle); }
@@ -166,22 +169,20 @@
 }
 .peer-dir-live .peer-dir-chip { color: var(--accent); }
 
-.peer-dir-handle {
-  margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px; color: var(--fg); word-break: break-word;
-}
-
 .peer-dir-cardmeta {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
   font-size: 11px; color: var(--fg-muted);
 }
-.peer-dir-branch, .peer-dir-shortid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* A missing author is stated, in the same italic the missing intent uses. */
+.peer-dir-owner.absent { font-style: italic; color: var(--fg-subtle); }
+.peer-dir-branch { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
+.peer-dir-details { margin-top: 2px; }
 .peer-dir-details-summary { cursor: pointer; font-size: 0.8rem; color: var(--fg-muted); }
 /* Newlines in agent-authored detail are kept by CSS, never by emitting markup
  * around the text. */
 .peer-dir-detail {
-  margin: 6px 0 0; font-size: 12px; line-height: 1.45; color: var(--fg);
+  margin: 10px 0 0; font-size: 12px; line-height: 1.45; color: var(--fg);
   white-space: pre-wrap; word-break: break-word;
 }
 

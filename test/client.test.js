@@ -524,16 +524,37 @@ test('an empty intent renders the italic placeholder, and every agent string is 
   assert.equal(tags.includes('SCRIPT'), false);
 });
 
-test('a short id is abbreviated exactly as humanize.ShortID does', () => {
+test('the author is labelled, and a missing one is stated rather than left blank', () => {
   const h = harness(mod);
   const host = h.mountView();
-  const long = 'x'.repeat(40);
   h.view().update(host, null, regGraph({
-    'acme/app': [entry({ sessionId: 'x'.repeat(24) }), entry({ sessionId: long, startedAt: new Date(Date.now() - 1000).toISOString() })],
+    'acme/app': [
+      entry({ sessionId: 'has-owner', owner: 'Alex Pezarro' }),
+      entry({ sessionId: 'no-owner', owner: '', startedAt: new Date(Date.now() - 1000).toISOString() }),
+    ],
   }));
-  const ids = all(host, 'peer-dir-shortid').map((n) => n.textContent);
-  assert.ok(ids.includes('x'.repeat(24)), '24 is inside the keep+4 threshold, so it is left alone');
-  assert.ok(ids.includes(`${'x'.repeat(20)}…`));
+  const owners = all(host, 'peer-dir-owner');
+  assert.deepEqual(owners.map((n) => n.textContent), ['author Alex Pezarro', 'no author recorded']);
+  assert.match(owners[1].className, /absent/);
+});
+
+test('the branch name carries no label, and the session id is not drawn at all', () => {
+  const h = harness(mod);
+  const host = h.mountView();
+  h.view().update(host, null, regGraph({ 'acme/app': [entry({ sessionId: 'sid-1', branch: 'claude/car-rental' })] }));
+  assert.deepEqual(all(host, 'peer-dir-branch').map((n) => n.textContent), ['claude/car-rental']);
+  assert.equal(all(host, 'peer-dir-shortid').length, 0);
+  assert.equal(all(host, 'peer-dir-handle').length, 0);
+});
+
+test('start and end sit together in one group', () => {
+  const h = harness(mod);
+  const host = h.mountView();
+  h.view().update(host, null, regGraph({ 'acme/app': [entry({ sessionId: 'live-1' })] }));
+  const times = all(host, 'peer-dir-times');
+  assert.equal(times.length, 1);
+  const inside = times[0].children.map((n) => n.className);
+  assert.deepEqual(inside, ['peer-dir-started', 'peer-dir-chip']);
 });
 
 test('an origin the registry does not know is "unknown-origin", never a guess', () => {
