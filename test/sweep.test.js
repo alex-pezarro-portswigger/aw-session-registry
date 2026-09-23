@@ -434,3 +434,42 @@ test('the directory fetch comes last, after every drain and ack', async () => {
   await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
   assert.equal(h.calls.at(-1), 'GET /v1/sessions');
 });
+
+// ── A card with no ledger entry must not look like an outage ─────────────────
+// `postNote` sends no `origin`, so the registry refuses to create an entry and
+// answers 404 for a card that never registered — which is MOST cards. Counting
+// that as unreachable would peg a healthy registry to "down" on the board.
+
+test('a 404 from the re-assert does NOT mark the registry unreachable', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 404, json: { error: 'no such session on this repo, and no origin was supplied to create one' } }
+    : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 1, 'it still tried');
+  assert.deepEqual(h.logs, [], 'a 404 is a fact about the card, not about the service');
+});
+
+// Left unguarded, the up-transition's `lastPublishAt = null` would fire off the
+// back of those 404s and re-run the whole per-card loop on the very next tick —
+// the POST-per-card trickle REPUBLISH_MS exists to prevent.
+test('404s do not re-arm the republish clock, so the slow cadence holds', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/w/app' }, { sessionId: 'card-2', cwd: '/w/app' }] });
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 404, json: { error: 'no such session' } }
+    : { json: { messages: [] } }));
+  for (let i = 0; i < 6; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 2, 'once per card, not once per card per tick');
+});
+
+// The silence is scoped to 404 alone: a registry that is genuinely refusing
+// writes still has to show up as down.
+test('a 500 from the re-assert IS still an outage', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 500, json: { error: 'boom' } }
+    : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /unreachable/);
+});

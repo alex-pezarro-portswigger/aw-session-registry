@@ -41,6 +41,20 @@ function okFetch(calls) {
   };
 }
 
+// What the registry answers for a card it has never heard of, now that
+// `postNote` sends no `origin` and so cannot create one. The COMMON case: most
+// cards never register with the registry at all.
+function notFoundFetch(calls) {
+  globalThis.fetch = async (target, opts = {}) => {
+    calls.push({ url: String(target), method: opts.method, body: opts.body ? JSON.parse(opts.body) : null });
+    return {
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'no such session on this repo, and no origin was supplied to create one' }),
+    };
+  };
+}
+
 beforeEach(() => { _resetRepoKeyCache(); _setGitOriginForTests(async () => 'git@github.com:acme/app.git'); });
 afterEach(() => { globalThis.fetch = realFetch; _setGitOriginForTests(null); _resetRepoKeyCache(); });
 
@@ -90,7 +104,10 @@ test('the published handle IS the card id, with intent and detail omitted', asyn
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].url, `${BASE}/v1/sessions/card-1/note`);
-  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', messagingHandle: 'card-1', origin: 'local' });
+  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', messagingHandle: 'card-1' });
+  // No `origin`: sending it made the note endpoint CREATE a blank ledger entry
+  // for a card that had never registered. See lib/registry.js.
+  assert.equal('origin' in h.calls[0].body, false);
 });
 
 test('no registry URL publishes nothing and says nothing — dispatch is far too frequent for a line', async () => {
@@ -148,7 +165,8 @@ test('archive CLEARS the handle on the registry, with an empty string (nil would
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].url, `${BASE}/v1/sessions/card-1/note`);
-  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', messagingHandle: '', origin: 'local' });
+  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', messagingHandle: '' });
+  assert.equal('origin' in h.calls[0].body, false);
   // finishedAt is NOT touched: closing out a ledger entry belongs to the
   // registry's own close-out endpoint, not to this extension.
   assert.equal('finishedAt' in h.calls[0].body, false);
@@ -184,4 +202,34 @@ test('archive and purge are synchronous — the core awaits them too', () => {
   h.store.receive('card-1', { id: 'a', fromHandle: 'p', body: 'x' });
   assert.equal(onArchive({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host }), undefined);
   assert.equal(onPurge({ sessionId: 'card-1', host: h.host }), undefined);
+});
+
+// ── A card with no ledger entry: the ordinary case, and it must be SILENT ────
+
+test('a 404 on publish says nothing — most cards never registered, and the sweep cannot fix it', async () => {
+  const h = harness();
+  notFoundFetch(h.calls);
+  onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.calls.length, 1, 'it still tried');
+  assert.deepEqual(h.logs, [], 'a line here would be one per dispatch for a working system');
+});
+
+test('a 404 on the archive unpublish says nothing either — no entry means no handle to clear', async () => {
+  const h = harness();
+  notFoundFetch(h.calls);
+  onArchive({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(h.logs, []);
+});
+
+// The 404 silence must not swallow a real failure: a 500 is still worth a line.
+test('a 500 on publish is STILL logged — only the missing-entry 404 is silent', async () => {
+  const h = harness();
+  globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: 'boom' }) });
+  onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /could not publish/);
 });

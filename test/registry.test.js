@@ -32,7 +32,7 @@ afterEach(() => { globalThis.fetch = realFetch; setPerHandleFallback(false); });
 
 // ── postNote ─────────────────────────────────────────────────────────────────
 
-test('postNote posts exactly the three fields the note endpoint accepts', async () => {
+test('postNote posts exactly the two fields it has any business sending', async () => {
   stub(() => ({ json: { session: {} } }));
   const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
   assert.equal(res.ok, true);
@@ -41,8 +41,48 @@ test('postNote posts exactly the three fields the note endpoint accepts', async 
   assert.equal(calls[0].headers['content-type'], 'application/json');
   // intent and detail are OMITTED, never sent empty: they are *string on the Go
   // side, so an empty string would CLEAR agent-authored text.
-  assert.deepEqual(Object.keys(calls[0].body).sort(), ['messagingHandle', 'origin', 'repo']);
-  assert.equal(calls[0].body.origin, 'local');
+  assert.deepEqual(Object.keys(calls[0].body).sort(), ['messagingHandle', 'repo']);
+});
+
+// THE REGRESSION THIS GUARDS: `origin` is what switches the note endpoint's
+// upsert into a CREATE, and this extension notes every live card in a git repo.
+// Sending it minted a shell ledger row — empty intent, empty detail, empty
+// branch, no owner — for every card that had never registered. `NoteRequest`
+// cannot carry branch or owner fields at all, so the row could never be filled
+// in afterwards.
+test('postNote NEVER sends origin — that is what created blank ledger entries', async () => {
+  stub(() => ({ json: {} }));
+  await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+  assert.equal('origin' in calls[0].body, false);
+  // Not even when a caller tries to pass one: the option is gone, so an
+  // `origin` in the options object must not reach the wire.
+  await postNote(BASE, 'card-2', { repo: 'acme/app', messagingHandle: 'card-2', origin: 'local' });
+  assert.equal('origin' in calls[1].body, false);
+});
+
+// With no origin the create path is closed, so the registry answers 404 for a
+// card it has never heard of. Callers need to tell that apart from an outage,
+// and `status === 404` at three call sites is a detail this module owns.
+test('a 404 comes back flagged notFound, so callers need not read a status code', async () => {
+  stub(() => ({ status: 404, json: { error: 'no such session on this repo, and no origin was supplied to create one' } }));
+  const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+  assert.equal(res.ok, false);
+  assert.equal(res.notFound, true);
+  assert.match(res.error, /no such session on this repo/);
+});
+
+test('notFound is false for every other failure, so an outage is never read as a missing entry', async () => {
+  for (const status of [400, 500, 503]) {
+    stub(() => ({ status, json: { error: 'boom' } }));
+    const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+    assert.equal(res.ok, false, `status ${status}`);
+    assert.equal(res.notFound, false, `status ${status}`);
+  }
+  // A thrown fetch (refused, DNS, timeout) has no status at all.
+  stub(() => new Error('ECONNREFUSED'));
+  const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+  assert.equal(res.ok, false);
+  assert.ok(!res.notFound);
 });
 
 test('postNote url-encodes the card id into the path', async () => {
