@@ -219,14 +219,13 @@ test('an injected <img src=x onerror=…> becomes TEXT and creates no element', 
   assert.deepEqual([...new Set(tags)].sort(), ['BUTTON', 'DIV', 'P', 'PRE', 'SPAN']);
 });
 
-test('a missing display name renders "unattributed" and is marked self-reported', () => {
+test('a missing display name renders "unattributed"', () => {
   const h = harness(mod);
   const host = h.mountPanel();
   h.contributions.get('panel.section').update(host, { sessionId: 'card-1' }, graphWith({
     inbox: { 'card-1': { messages: [message({ fromDisplay: '' })], channels: [] } },
   }));
   assert.equal(all(host, 'peer-from-name')[0].textContent, 'unattributed');
-  assert.match(all(host, 'peer-claim')[0].textContent, /self-reported/);
 });
 
 // ── No Enter-to-approve ──────────────────────────────────────────────────────

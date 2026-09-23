@@ -6,7 +6,7 @@ import path from 'node:path';
 import { onDispatch, onResume, onArchive, onPurge } from '../lib/hooks.js';
 import { PeerMessageStore } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
-import { _setGitBranchForTests, _setGitIdentityForTests } from '../lib/git-identity.js';
+import { _setGitBranchForTests, _setGitIdentityForTests } from '../lib/git-facts.js';
 
 const BASE = 'https://registry.example.test';
 const realFetch = globalThis.fetch;

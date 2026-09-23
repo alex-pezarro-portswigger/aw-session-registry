@@ -22,7 +22,6 @@ function envelope(over = {}) {
     fromHandle: 'peer-card',
     fromRepo: 'acme/app',
     fromDisplay: 'Sam Rivera',
-    fromOwnerKey: '1a2b3c4d5e6f7a8b',
     body: 'hold off on hooks/spawn-runner?',
     createdAt: '2026-09-18T10:00:00Z',
     ...over,

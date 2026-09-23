@@ -6,6 +6,7 @@ import path from 'node:path';
 import { sendPeerMessageTool, listPeerSessionsTool } from '../lib/tools.js';
 import { PeerMessageStore, MAX_BODY_CHARS } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
+import { _resetGitNameCache, _setGitNameForTests } from '../lib/git-identity.js';
 
 const BASE = 'https://registry.example.test';
 const realFetch = globalThis.fetch;
@@ -41,17 +42,27 @@ function fakeGit(originUrl) {
   _setGitOriginForTests(async () => originUrl);
 }
 
+// Same seam for `git config user.name`.
+function fakeGitName(name) {
+  _setGitNameForTests(async () => name);
+}
+
 function text(result) {
   return result.content.map((c) => c.text).join('\n');
 }
 
-beforeEach(() => { _resetRepoKeyCache(); });
-afterEach(() => { globalThis.fetch = realFetch; _setGitOriginForTests(null); _resetRepoKeyCache(); });
+beforeEach(() => { _resetRepoKeyCache(); _resetGitNameCache(); fakeGitName(null); });
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  _setGitOriginForTests(null); _resetRepoKeyCache();
+  _setGitNameForTests(null); _resetGitNameCache();
+});
 
 // ── send_peer_message ────────────────────────────────────────────────────────
 
-test('send_peer_message resolves the caller"s repo, posts the right body, and logs it outbound', async () => {
+test('send_peer_message resolves the caller"s repo, sets fromDisplay from the git name, and logs it outbound', async () => {
   fakeGit('git@github.com:acme/app.git');
+  fakeGitName('Sam Rivera\n');
   const h = harness();
   h.stub(() => ({ json: { message: { id: 'srv-9' } } }));
   const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
@@ -62,15 +73,24 @@ test('send_peer_message resolves the caller"s repo, posts the right body, and lo
   // parameter through which to ask for anything else.
   assert.deepEqual(h.calls[0].body, {
     toRepo: 'acme/app', toHandle: 'peer-card', fromRepo: 'acme/app', fromHandle: 'card-1', body: 'ping',
+    fromDisplay: 'Sam Rivera',
   });
-  // fromOwnerKey/fromDisplay are OMITTED: the relay echoes an asserted identity
-  // without verifying it, so this does not assert one it cannot compute.
-  assert.equal('fromOwnerKey' in h.calls[0].body, false);
-  assert.equal('fromDisplay' in h.calls[0].body, false);
 
   assert.deepEqual(h.store.threadFor('card-1', 'peer-card').map((x) => [x.dir, x.body]), [['out', 'ping']]);
   assert.equal(h.rebuilds(), 1);
   assert.match(text(res), /has to approve it/);
+});
+
+test('omits fromDisplay entirely when no git name is configured', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  fakeGitName(null);
+  const h = harness();
+  h.stub(() => ({ json: { message: { id: 'srv-10' } } }));
+  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
+  assert.equal(res.isError, undefined);
+  // Absent, never '': the Go side treats an empty string as a clear.
+  assert.equal('fromDisplay' in h.calls[0].body, false);
+  assert.notEqual(h.calls[0].body.fromDisplay, '');
 });
 
 test('a caller whose folder is not a git checkout is told that, clearly', async () => {

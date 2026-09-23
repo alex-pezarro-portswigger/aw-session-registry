@@ -28,11 +28,6 @@
 // what this button buys, so the button says it.
 const ALLOW_ALL_HINT = 'Allow all lets this peer’s later messages reach the agent with no click. They are pasted at the composer’s cursor, so one can land in the middle of something you are part-way through typing.';
 
-// "from" is an ASSERTION. The relay echoes whatever a sender claimed about
-// itself; the only fields the board can vouch for are the handle it drained
-// and the repo it asked about.
-const FROM_IS_A_CLAIM = 'self-reported';
-
 const MODE_TEXT = {
   live: 'Delivered',
   dormant: 'Woke the card and delivered',
@@ -220,7 +215,6 @@ function approvalCard(sessionId, m) {
   // make a click in here flip an extension's enable flag.
   const from = el('div', 'peer-msg-from');
   from.appendChild(el('span', 'peer-from-name', m.fromDisplay || 'unattributed'));
-  from.appendChild(el('span', 'peer-claim', ` (${FROM_IS_A_CLAIM})`));
   card.appendChild(from);
 
   const meta = el('div', 'peer-msg-meta');
@@ -263,7 +257,6 @@ function channelList(sessionId, channels) {
     const who = el('div', 'peer-channel-who');
     if (c.lastDisplay) {
       who.appendChild(el('span', 'peer-from-name', c.lastDisplay));
-      who.appendChild(el('span', 'peer-claim', ` (${FROM_IS_A_CLAIM}) `));
     }
     who.appendChild(el('span', 'peer-handle', c.peerHandle || 'unknown session'));
     row.appendChild(who);
