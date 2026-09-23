@@ -434,3 +434,91 @@ test('the directory fetch comes last, after every drain and ack', async () => {
   await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
   assert.equal(h.calls.at(-1), 'GET /v1/sessions');
 });
+
+// ── A card with no ledger entry must not look like an outage ─────────────────
+// `postNote` sends no `origin`, so the registry refuses to create an entry and
+// answers 404 for a card with no row. The sweep repairs that by registering,
+// but counting the 404 as unreachable would peg a healthy registry to "down".
+
+const git = {
+  gitBranch: async () => 'feat/x',
+  gitIdentity: async () => ({ name: 'Sam Rivera', email: 'sam@example.com' }),
+};
+
+test('a 404 from the re-assert does NOT mark the registry unreachable', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 404, json: { error: 'no such session on this repo, and no origin was supplied to create one' } }
+    : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  // note → 404 → register → note, and the SECOND 404 is still not an outage.
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 2, 'it tried, repaired, and tried again');
+  assert.deepEqual(h.logs, [], 'a 404 is a fact about the card, not about the service');
+});
+
+test('step 8 happy path: one note per live card, and no register', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/w/app' }, { sessionId: 'card-2', cwd: '/w/app' }] });
+  h.stub(() => ({ json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  assert.equal(h.calls.filter((c) => c.endsWith('/note')).length, 2);
+  assert.equal(h.calls.filter((c) => c === 'POST /v1/sessions').length, 0);
+});
+
+// A 404 proves the row is absent — a restarted registry lost its ledger — so
+// the repair re-registers with the card's own intent, then notes again.
+test('repair path: a note 404 re-registers the row with the card facts, then re-notes', async () => {
+  const card = { sessionId: 'card-1', cwd: '/w/app', intent: 'wire the drain', name: 'Drain', worktree: { branch: 'wt/d' }, runtime: 'devcontainer' };
+  const h = harness({ sessions: [card] });
+  const bodies = [];
+  let registered = false;
+  h.stub((target, opts) => {
+    if (opts.method !== 'POST') return { json: { messages: [] } };
+    bodies.push({ path: new URL(target).pathname, body: JSON.parse(opts.body) });
+    if (target.endsWith('/v1/sessions')) { registered = true; return { json: {} }; }
+    return registered ? { json: {} } : { status: 404, json: { error: 'no such session' } };
+  });
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  assert.deepEqual(bodies.map((b) => b.path), ['/v1/sessions/card-1/note', '/v1/sessions', '/v1/sessions/card-1/note']);
+  assert.deepEqual(bodies[1].body, {
+    repo: 'acme/app', sessionId: 'card-1', origin: 'local', branch: 'feat/x',
+    intent: 'wire the drain', detail: 'Agent Wrangler card · cwd /w/app · worktree wt/d · task Drain',
+    ownerName: 'Sam Rivera', ownerEmail: 'sam@example.com',
+  });
+  assert.deepEqual(h.logs, [], 'the repair logs nothing');
+});
+
+test('a thrown fetch on the re-assert IS an outage: one line, then down→down is silent', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note') ? new Error('ECONNREFUSED') : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  await postmaster({ host: h.host, now: REPUBLISH_MS, repoKey: h.repoKey, ...git });
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /unreachable/);
+});
+
+// Left unguarded, the up-transition's `lastPublishAt = null` would fire off the
+// back of those 404s and re-run the whole per-card loop on the very next tick —
+// the POST-per-card trickle REPUBLISH_MS exists to prevent.
+test('404s do not re-arm the republish clock, so the slow cadence holds', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/w/app' }, { sessionId: 'card-2', cwd: '/w/app' }] });
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 404, json: { error: 'no such session' } }
+    : { json: { messages: [] } }));
+  for (let i = 0; i < 6; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey, ...git });
+  // Two notes per card (the note and the repair's re-note) on the first tick,
+  // and nothing on the next five inside REPUBLISH_MS.
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 4, 'once per card (plus its repair), not once per card per tick');
+  assert.equal(h.calls.filter((c) => c === 'POST /v1/sessions').length, 2);
+});
+
+// The silence is scoped to 404 alone: a registry that is genuinely refusing
+// writes still has to show up as down.
+test('a 500 from the re-assert IS still an outage', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 500, json: { error: 'boom' } }
+    : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /unreachable/);
+});

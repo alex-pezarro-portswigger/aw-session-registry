@@ -125,6 +125,25 @@ default, and the button says so.
 If this turns out to matter, the fix is a core one (a deferral-aware `deliver`
 variant), not something this extension can do.
 
+### What it writes to the registry ledger
+
+Each card in a git repo gets one registry row, keyed on its card id, and the
+extension owns that row from start to end:
+
+- **Dispatch** registers it (origin, branch, git owner, the card's intent, and a
+  one-line detail naming it as an Agent Wrangler card), then notes the card id
+  on as its messaging handle.
+- **Resume** re-registers with no intent or detail, so whatever the agent wrote
+  survives, while the branch is refreshed and a closed-out row is reopened.
+- **Archive** closes the row out and clears the handle.
+
+The note never creates a row. It used to, and every unregistered card became a
+permanent blank row that could crowd real ones out of the per-repo cap. Rows are
+now only ever made by an explicit register. The owner's email is sent (hashed by
+the registry, never stored raw); the registry is unauthenticated behind an
+ingress CIDR allowlist, so treat what is written there as visible to anything
+that can reach it.
+
 ### Two registry rows for one piece of work
 
 A Claude Code hook may already hold a registry row for the same work, keyed on
@@ -132,7 +151,13 @@ the **conversation** id. The row this extension publishes is keyed on the
 **card** id, and that is the *addressable* one — it is what `list_peer_sessions`
 returns and what a message can be sent to.
 
-Two rows for one piece of work is the price of the card id being the only stable
+A companion change to the `session-registry` plugin collapses this for Claude
+cards: with `AW_SESSION_ID` in the hook's session-id precedence, the hook's rich
+registration and this extension's handle land on one row keyed on the card id.
+Nothing here depends on that change — the registry merges registrations per
+field, so whichever lands second fills gaps rather than overwriting.
+
+Without it, two rows for one piece of work is the price of the card id being the only stable
 handle the wrangler owns. The conversation id is deliberately not available to an
 extension at all: `host-api/project.js` withholds it precisely because it is
 `--resume`-able, which would reach a conversation outside the board's lifecycle.
@@ -151,9 +176,11 @@ That is intended. Nobody wants day-old peer chatter pasted into a fresh session.
 empty string, which is what clears a stored value where nil leaves it alone — so
 peers stop being offered a card that can no longer receive anything.
 
-It deliberately does **not** touch `finishedAt`: closing out a ledger entry
-belongs to the registry's own close-out endpoint and the hooks that own it. This
-extension publishes a handle; it does not manage an entry's lifecycle.
+It also **closes the row out**, setting `finishedAt`. The extension registered
+the row, so it owns the row's end — and a finished row is the only kind the
+registry's `pruneLocked` can evict under its per-repo cap, so an unfinished one
+would sit for the full retain bound and could crowd real rows out. A 404 on
+either call means there was no row to end, and is silent.
 
 Without this, `list_peer_sessions` kept offering archived cards, a send to one
 was accepted by the relay and drained by the recipient board, and then refused
@@ -191,6 +218,11 @@ Its ledger is in memory by default, so a restart empties it. The sweep notices
 the up transition and republishes every live card's handle on the next tick
 rather than waiting for its own five-minute re-assert clock — so peers can find
 each other again within about 15 seconds, not five minutes.
+
+The re-assert **repairs**, not just re-notes: a note that comes back 404 proves
+the row is gone, so the sweep re-registers it (origin, branch, owner, intent,
+detail) and then notes the handle again. A restarted registry gets real rows
+back, not just handles. A 404 is never counted as the registry being down.
 
 The re-assert is on that slow clock at all because it is one POST **per live
 card**, where a drain is one request per repo: putting it on the 15-second tick
