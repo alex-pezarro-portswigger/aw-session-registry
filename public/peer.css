@@ -32,9 +32,6 @@
 
 .peer-msg-from { font-size: 13px; }
 .peer-from-name { font-weight: 600; color: var(--fg); }
-/* "self-reported": the relay echoes whatever a sender asserted and verifies
- * none of it, so the qualifier is deliberately not styled away to nothing. */
-.peer-claim { font-size: 11px; color: var(--fg-subtle); }
 
 .peer-msg-meta { font-size: 11px; color: var(--fg-muted); }
 .peer-handle { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }

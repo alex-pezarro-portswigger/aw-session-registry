@@ -20,8 +20,9 @@ into the wrangler itself. The consent modal's own wording is the canonical
 statement of this and nothing here softens it.
 
 **Sender identity is echoed, not verified.** The relay carries whatever a
-sending board asserted about itself and checks none of it. The approval card
-therefore labels "from" as `self-reported`. The two things the board *can*
+sending board asserted about itself and checks none of it. The "from" name is
+the sender's local git `user.name`, read from its git config, asserted by the
+sending board and not verified by anything. The two things the board *can*
 vouch for are the handle it drained and the repo it asked about, which is why
 the frame the agent sees names both.
 
