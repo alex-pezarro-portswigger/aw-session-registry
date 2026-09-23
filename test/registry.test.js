@@ -1,7 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  postNote, listSessions, listAllSessions, send, drain, ack,
+  postNote, postRegister, postCloseOut, listSessions, listAllSessions, send, drain, ack,
   setPerHandleFallback, usingPerHandleFallback,
   MAX_HANDLES_PER_DRAIN, MAX_IDS_PER_ACK,
 } from '../lib/registry.js';
@@ -325,4 +325,43 @@ test('an unusable base URL is an error rather than a fetch, here too', async () 
   stub(() => ({ json: {} }));
   assert.equal((await listAllSessions('file:///etc/passwd')).ok, false);
   assert.equal(calls.length, 0);
+});
+
+// ── postRegister / postCloseOut ──────────────────────────────────────────────
+
+test('postRegister posts the required three plus only the non-empty optionals', async () => {
+  stub(() => ({ json: { session: {} } }));
+  const res = await postRegister(BASE, 'card-1', {
+    repo: 'acme/app', origin: 'local', branch: 'feat/x', intent: 'wiring', detail: '',
+    ownerName: 'Sam', ownerEmail: '',
+  });
+  assert.equal(res.ok, true);
+  assert.equal(calls[0].url, `${BASE}/v1/sessions`);
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(calls[0].body, { repo: 'acme/app', sessionId: 'card-1', origin: 'local', branch: 'feat/x', intent: 'wiring', ownerName: 'Sam' });
+  await postRegister(BASE, 'card-2', { repo: 'acme/app', origin: 'runner', branch: null, intent: '', detail: '', ownerName: '', ownerEmail: '' });
+  assert.deepEqual(calls[1].body, { repo: 'acme/app', sessionId: 'card-2', origin: 'runner' }, 'empty is omitted, never sent as ""');
+});
+
+test('postRegister refuses locally without cardId, repo or origin', async () => {
+  stub(() => ({ json: {} }));
+  for (const [id, opts] of [['', { repo: 'a/b', origin: 'local' }], ['c', { origin: 'local' }], ['c', { repo: 'a/b' }]]) {
+    assert.equal((await postRegister(BASE, id, opts)).ok, false);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('postCloseOut posts {repo} plus branch only when non-empty', async () => {
+  stub(() => ({ json: {} }));
+  await postCloseOut(BASE, 'card-1', { repo: 'acme/app', branch: 'feat/x' });
+  await postCloseOut(BASE, 'card-1', { repo: 'acme/app', branch: '' });
+  assert.equal(calls[0].url, `${BASE}/v1/sessions/card-1/close-out`);
+  assert.deepEqual(calls[0].body, { repo: 'acme/app', branch: 'feat/x' });
+  assert.deepEqual(calls[1].body, { repo: 'acme/app' });
+});
+
+test('a 404 from either new call is notFound and never throws', async () => {
+  stub(() => ({ status: 404, json: { error: 'no such session' } }));
+  assert.equal((await postRegister(BASE, 'c', { repo: 'a/b', origin: 'local' })).notFound, true);
+  assert.equal((await postCloseOut(BASE, 'c', { repo: 'a/b' })).notFound, true);
 });
