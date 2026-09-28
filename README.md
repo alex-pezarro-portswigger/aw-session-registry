@@ -1,9 +1,10 @@
 # aw-session-registry
 
 An [Agent Wrangler](https://github.com/alex-pezarro-portswigger/agent-wrangler) extension
-that lets sessions working in the **same repo** send each other messages.
+that lets sessions working in the **same repo** inform each other of what they are doing,
+and send messages to each other.
 
-Each card publishes a handle to the
+Each session publishes it's handle and what it's doing to the
 [session registry](https://github.com/portswigger-apps/cod-session-registry), and agents
 get two MCP tools: `list_peer_sessions` and `send_peer_message`. Inbound messages are
 checked every 15 seconds and **wait on the card for you to approve them** before the
