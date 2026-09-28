@@ -37,7 +37,10 @@ one.
 
 - Publishes each live card's **messaging handle** (its card id) to the registry,
   so peers in the same repo can address it.
-- Gives an agent two MCP tools: `list_peer_sessions` and `send_peer_message`.
+- Gives an agent four MCP tools: `list_peer_sessions`, `send_peer_message`,
+  `list_repo_sessions` and `update_session_note`.
+- Delivers the registry's peer brief when a card starts. A launch instruction
+  reminds the agent to check peers and update its note before editing.
 - Drains inbound messages on a 15-second sweep, stores them, and **acks the
   relay only after they are on disk**.
 - Puts every unapproved message behind a click on the card: **Allow once ·
@@ -132,7 +135,8 @@ extension owns that row from start to end:
 
 - **Dispatch** registers it (origin, branch, git owner, the card's intent, and a
   one-line detail naming it as an Agent Wrangler card), then notes the card id
-  on as its messaging handle.
+  on as its messaging handle. It also asks the registry for its one-shot peer
+  brief and delivers that to the agent.
 - **Resume** re-registers with no intent or detail, so whatever the agent wrote
   survives, while the branch is refreshed and a closed-out row is reopened.
 - **Archive** closes the row out and clears the handle.
@@ -143,6 +147,24 @@ now only ever made by an explicit register. The owner's email is sent (hashed by
 the registry, never stored raw); the registry is unauthenticated behind an
 ingress CIDR allowlist, so treat what is written there as visible to anything
 that can reach it.
+
+`update_session_note` can replace the dispatch intent and detail when the agent
+has a concrete plan; `list_repo_sessions` reads all recent peers, including
+those with no messaging handle. Both tools derive the repo and card id from the
+calling Wrangler session. The optional `repo` and `session_id` arguments exist
+for compatibility with the standalone plugin and are checked against the card.
+The messaging handle is always the card id, because that is what this board can
+deliver to.
+
+The plugin uses `UserPromptSubmit` to repeat its intent reminder on up to three
+prompts. Wrangler's extension API has no per-prompt hook. Instead, this
+extension ships an always-on launch instruction. Wrangler already has the
+user's request at launch, so the instruction can ask for a concrete note then.
+
+The brief is delivered through Wrangler's message delivery API after the card
+starts, so it may appear as a separate turn after the initial request. If the
+standalone plugin is also installed, its own `SessionStart` hook can show the
+same brief too; the plugin's hook does not use the registry's one-shot gate.
 
 ### Two registry rows for one piece of work
 
@@ -240,8 +262,9 @@ mechanism.
 | `lib/registry.js` | The HTTP client. Every function returns `{ok, …}` and never throws. |
 | `lib/repo-key.js` | `<owner>/<repo>`, reimplementing the registry's own Go normalisation. |
 | `lib/framing.js` | The `[peer message · untrusted · …]` frame and its marker escaping. |
-| `lib/hooks.js` | Handle publication (non-blocking) and archive/purge cleanup. |
-| `lib/tools.js` | `send_peer_message`, `list_peer_sessions`. |
+| `lib/hooks.js` | Card registration, start brief delivery, handle publication and archive/purge cleanup. |
+| `lib/tools.js` | Peer messaging and registry MCP tools. |
+| `skills/session-registry/` | Always-on launch reminder and on-demand skill. |
 | `lib/handlers.js` | The six control handlers behind the buttons. |
 | `lib/graph.js` | The `graph.peerMessaging` contributor. |
 | `lib/directory.js` | The last directory fetch, held for the graph. Pure module state; the sweep writes it, the graph reads it. |

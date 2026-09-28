@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sendPeerMessageTool, listPeerSessionsTool } from '../lib/tools.js';
+import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from '../lib/tools.js';
 import { PeerMessageStore, MAX_BODY_CHARS } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
 import { _resetGitNameCache, _setGitNameForTests } from '../lib/git-identity.js';
@@ -202,4 +202,42 @@ test('both tools declare a zod-shaped inputSchema the MCP SDK can register', () 
   assert.equal(typeof sendPeerMessageTool.inputSchema.to.parse, 'function');
   assert.equal(typeof sendPeerMessageTool.inputSchema.text.parse, 'function');
   assert.deepEqual(listPeerSessionsTool.inputSchema, {});
+});
+
+test('update_session_note writes only agent-supplied fields to this card', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  h.stub(() => ({ json: { session: { intent: 'make registry tools', detail: 'lib/tools.js' } } }));
+  const res = await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' },
+    { intent: 'make registry tools', detail: 'lib/tools.js' });
+  assert.equal(res.isError, undefined);
+  assert.equal(h.calls[0].url, `${BASE}/v1/sessions/card-1/note`);
+  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', intent: 'make registry tools', detail: 'lib/tools.js' });
+  assert.match(text(res), /make registry tools/);
+});
+
+test('registry note tool refuses a stale repo or session id before writing', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  h.stub(() => ({ json: {} }));
+  for (const args of [{ repo: 'wrong/repo', intent: 'x' }, { session_id: 'other', intent: 'x' },
+    { messaging_handle: 'other', intent: 'x' }]) {
+    assert.equal((await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' }, args)).isError, true);
+  }
+  assert.equal(h.calls.length, 0);
+});
+
+test('list_repo_sessions includes handle-less and finished peers, with filters', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  const recent = new Date().toISOString();
+  h.stub(() => ({ json: { sessions: [
+    { sessionId: 'card-1', startedAt: recent },
+    { sessionId: 'peer-a', startedAt: recent, intent: 'work' },
+    { sessionId: 'peer-b', startedAt: recent, finishedAt: recent },
+  ] } }));
+  const all = JSON.parse(text(await listRepoSessionsTool.handler({ host: h.host, caller: 'card-1' })));
+  assert.deepEqual(all.sessions.map((s) => s.sessionId), ['peer-a', 'peer-b']);
+  const live = JSON.parse(text(await listRepoSessionsTool.handler({ host: h.host, caller: 'card-1' }, { live_only: true })));
+  assert.deepEqual(live.sessions.map((s) => s.sessionId), ['peer-a']);
 });

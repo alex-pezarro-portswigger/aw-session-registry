@@ -139,6 +139,16 @@ test('every tool and handler has a name/type and a handler function', () => {
   assert.equal(new Set(manifest.handlers.map((h) => h.type)).size, manifest.handlers.length);
 });
 
+test('registry tools and launch reminder are contributed together', () => {
+  assert.deepEqual(manifest.tools.map((t) => t.name), [
+    'send_peer_message', 'list_peer_sessions', 'list_repo_sessions', 'update_session_note',
+  ]);
+  assert.deepEqual(manifest.skills, ['session-registry']);
+  const skillDir = path.join(dir, 'skills', 'session-registry');
+  assert.match(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /^---\nname: session-registry\n/);
+  assert.match(fs.readFileSync(path.join(skillDir, 'WRANGLER.md'), 'utf8'), /update_session_note/);
+});
+
 test('every session hook is a known name and a function', () => {
   for (const [k, fn] of Object.entries(manifest.session)) {
     assert.ok(SESSION_HOOKS.has(k), k);

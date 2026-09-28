@@ -139,6 +139,30 @@ test('onDispatch registers THEN notes, with the card intent, a one-line detail, 
   assert.doesNotMatch(h.calls[0].body.detail, /\n/);
 });
 
+test('dispatch delivers the registry brief once, after registering the card', async () => {
+  const h = harness();
+  const delivered = [];
+  h.host.deliver = async (id, body) => { delivered.push({ id, body }); return { mode: 'live' }; };
+  globalThis.fetch = async (target, opts = {}) => {
+    h.calls.push({ url: String(target), body: JSON.parse(opts.body) });
+    return { ok: true, status: 200, json: async () => String(target).endsWith('/v1/brief')
+      ? { hookSpecificOutput: { additionalContext: '2 other sessions on acme/app' } }
+      : { session: {} } };
+  };
+  assert.equal(onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app', intent: 'work' }, host: h.host }), undefined);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(h.calls.map((c) => c.url), [
+    `${BASE}/v1/sessions`, `${BASE}/v1/sessions/card-1/note`, `${BASE}/v1/brief`,
+  ]);
+  assert.equal(h.calls[2].body.onlyIfUnbriefed, true);
+  assert.deepEqual(delivered.map((d) => d.id), ['card-1']);
+  assert.match(delivered[0].body, /2 other sessions on acme\/app/);
+  assert.match(delivered[0].body, /untrusted/);
+  onResume({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.calls.filter((c) => c.url.endsWith('/v1/brief')).length, 1);
+});
+
 test('onResume registers then notes with intent and detail ABSENT, so the agent text survives', async () => {
   const h = harness();
   okFetch(h.calls);
