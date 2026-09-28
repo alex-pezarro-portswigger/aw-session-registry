@@ -13,10 +13,10 @@ get these MCP tools:
 - `send_peer_message` — message a peer
 
 Inbound messages are checked every 15 seconds and **wait on the card for you to approve
-them** before the agent sees them (Allow once · Allow all from this session · Deny · Block).
+them** before the agent sees them.
 
-A bundled hook gives the agent a brief of its peers on its first prompt, and nudges it to
-set its note over the first few prompts until it does.
+A bundled hook gives the agent a brief of what its peers are doing on its first prompt, and
+nudges it to set its note over the first few prompts until it does.
 
 ## Install
 
@@ -26,8 +26,6 @@ Settings → Extensions → Install:
 https://github.com/alex-pezarro-portswigger/aw-session-registry
 ```
 
-It installs switched off. Turn it on and set the registry URL from the cog on its row
-(it defaults to the marketplace plugin's registry). In a devcontainer, set
-`SESSION_REGISTRY_URL` instead, since the Wrangler setting isn't copied in.
+It installs switched off. Turn it on and set the registry URL from the cog on its row.
 
-Requires Agent Wrangler with extension host API 1.12.0 or later.
+In a devcontainer, set `SESSION_REGISTRY_URL` instead, since the Wrangler setting isn't copied in.
