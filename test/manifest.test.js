@@ -89,8 +89,8 @@ test('sessions:wake is deliberately absent — host.deliver already wakes a targ
   assert.equal(manifest.requires.includes('sessions:wake'), false);
 });
 
-test('the declared host API range covers the onMessage seam the client half uses', () => {
-  assert.equal(manifest.engines.wranglerApi, '^1.2.0');
+test('the declared host API range covers declarative native hooks', () => {
+  assert.equal(manifest.engines.wranglerApi, '^1.12.0');
   assert.ok(fs.readFileSync(path.join(ROOT, 'public/client.js'), 'utf8').includes('onMessage'));
 });
 
@@ -115,8 +115,8 @@ test('every setting def has a valid key, type and label, with no duplicates', ()
       if (s[k] != null) assert.equal(typeof s[k], 'string', `${s.key}.${k}`);
     }
     // There is no `default` on a def, deliberately: an unset setting must read
-    // as undefined, which is what the "no registry URL means wholly inert"
-    // behaviour depends on. And no `secret` type exists to ask for.
+    // as undefined; registryUrlFor supplies the plugin default. No `secret`
+    // type exists to ask for.
     assert.equal('default' in s, false, `${s.key} must not declare a default`);
   }
   assert.deepEqual([...keys], ['registryUrl', 'pollSeconds']);
@@ -137,6 +137,18 @@ test('every tool and handler has a name/type and a handler function', () => {
     assert.match(h.type, /^peer-/);
   }
   assert.equal(new Set(manifest.handlers.map((h) => h.type)).size, manifest.handlers.length);
+});
+
+test('registry tools and launch reminder are contributed together', () => {
+  assert.deepEqual(manifest.tools.map((t) => t.name), [
+    'send_peer_message', 'list_peer_sessions', 'list_repo_sessions', 'update_session_note',
+  ]);
+  assert.deepEqual(manifest.skills, ['session-registry']);
+  const skillDir = path.join(dir, 'skills', 'session-registry');
+  assert.match(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /^---\nname: session-registry\n/);
+  const native = JSON.parse(fs.readFileSync(path.join(skillDir, 'hooks', 'hooks.json'), 'utf8'));
+  assert.deepEqual(Object.keys(native.hooks).sort(), manifest.hooks.slice().sort());
+  assert.deepEqual(manifest.hooks, pkg.wranglerExtension.hooks);
 });
 
 test('every session hook is a known name and a function', () => {

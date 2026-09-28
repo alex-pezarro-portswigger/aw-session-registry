@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { peerMessagingGraph, noteRegistryUp, MAX_GRAPH_BODY_CHARS } from '../lib/graph.js';
+import { peerMessagingGraph, noteRegistryUp, MAX_GRAPH_BODY_CHARS, MAX_REGISTRY_CHARS } from '../lib/graph.js';
+import { _resetDirectory, noteDirectory } from '../lib/directory.js';
 import { PeerMessageStore, MAX_BODY_CHARS, MAX_PENDING_PER_SESSION } from '../lib/store.js';
 
 function harness({ registryUrl = 'https://r.test', withStore = true } = {}) {
@@ -23,7 +24,17 @@ function envelope(over = {}) {
   return { id: 'm1', fromHandle: 'peer-card', fromRepo: 'acme/app', fromDisplay: 'Sam Rivera', body: 'ping', ...over };
 }
 
-beforeEach(() => { noteRegistryUp(null); });
+beforeEach(() => { noteRegistryUp(null); _resetDirectory(); });
+
+function dirEntry(over = {}) {
+  return {
+    sessionId: 'sess-1', origin: 'local', intent: 'wiring the drain', detail: 'the long version',
+    branch: 'main', startedAt: '2026-09-20T09:00:00Z', finishedAt: null,
+    messagingHandle: 'card-1', owner: 'Sam Rivera',
+    ownerKey: 'abc123', briefedAt: null, repo: 'acme/app',
+    ...over,
+  };
+}
 
 // `assertGraphKeys` runs the contributor once per activation against
 // `{graph: {}}`; a throw there quarantines the whole extension.
@@ -121,9 +132,9 @@ test('a body-heavy BOARD degrades to counts rather than a vast graph, and SAYS s
   for (const c of cards) assert.equal(g.bySession[c].pending, MAX_PENDING_PER_SESSION);
 });
 
-test('configured says whether there is anywhere to look', () => {
+test('the marketplace default gives the extension a registry URL', () => {
   assert.equal(peerMessagingGraph({ host: harness().host, graph: {} }).peerMessaging.configured, true);
-  assert.equal(peerMessagingGraph({ host: harness({ registryUrl: null }).host, graph: {} }).peerMessaging.configured, false);
+  assert.equal(peerMessagingGraph({ host: harness({ registryUrl: null }).host, graph: {} }).peerMessaging.configured, true);
 });
 
 test('registryUp is null until the sweep has tried, then whatever it last saw', () => {
@@ -133,4 +144,80 @@ test('registryUp is null until the sweep has tried, then whatever it last saw', 
   assert.equal(peerMessagingGraph({ host: h.host, graph: {} }).peerMessaging.registryUp, false);
   noteRegistryUp(true);
   assert.equal(peerMessagingGraph({ host: h.host, graph: {} }).peerMessaging.registryUp, true);
+});
+
+// ── registry: the cross-repo directory the Session registry view draws ───────
+
+test('registry is empty-but-present on a host with no store', () => {
+  const g = peerMessagingGraph({ host: harness({ withStore: false }).host, graph: {} }).peerMessaging;
+  assert.deepEqual(g.registry, { repos: {}, fetchedAt: null, error: null, truncated: false });
+});
+
+test('registry projects exactly the nine fields, dropping ownerKey and briefedAt', () => {
+  const h = harness();
+  noteDirectory({ ok: true, repos: { 'acme/app': [dirEntry()] } }, 1234);
+  const reg = peerMessagingGraph({ host: h.host, graph: {} }).peerMessaging.registry;
+  assert.equal(reg.fetchedAt, 1234);
+  assert.equal(reg.error, null);
+  assert.deepEqual(Object.keys(reg.repos['acme/app'][0]).sort(), [
+    'branch', 'detail', 'finishedAt', 'intent', 'messagingHandle',
+    'origin', 'owner', 'sessionId', 'startedAt',
+  ]);
+  assert.equal(JSON.stringify(reg).includes('abc123'), false, 'an identity hash has no business on a board');
+});
+
+test('registry carries the last failure text so the view can stay honest', () => {
+  const h = harness();
+  noteDirectory({ ok: true, repos: { 'acme/app': [dirEntry()] } }, 1234);
+  noteDirectory({ ok: false, error: 'ECONNREFUSED' }, 5678);
+  const reg = peerMessagingGraph({ host: h.host, graph: {} }).peerMessaging.registry;
+  assert.equal(reg.error, 'ECONNREFUSED');
+  assert.equal(reg.fetchedAt, 1234, 'the last SUCCESSFUL fetch, not this one');
+  assert.equal(reg.repos['acme/app'].length, 1);
+});
+
+test('registry survives a JSON round trip', () => {
+  const h = harness();
+  noteDirectory({ ok: true, repos: { 'acme/app': [dirEntry()], 'acme/other': [dirEntry({ sessionId: 's2' })] } }, 9);
+  const g = JSON.parse(JSON.stringify(peerMessagingGraph({ host: h.host, graph: {} }))).peerMessaging;
+  assert.deepEqual(Object.keys(g.registry.repos).sort(), ['acme/app', 'acme/other']);
+  assert.equal(g.registry.repos['acme/app'][0].intent, 'wiring the drain');
+});
+
+// A SEPARATE tripwire from MAX_GRAPH_BODY_CHARS: the two bound different
+// payloads, and one shared budget would let a fat registry starve the approval
+// cards a human is actually being asked about.
+test('a fat directory degrades to truncated inside the 256KB cap', () => {
+  const h = harness();
+  const detail = 'y'.repeat(4000);
+  const repos = {};
+  for (let r = 0; r < 5; r++) {
+    repos[`acme/repo-${r}`] = Array.from({ length: 40 }, (_, i) => dirEntry({ sessionId: `s${r}-${i}`, detail }));
+  }
+  noteDirectory({ ok: true, repos }, 1);
+  const reg = peerMessagingGraph({ host: h.host, graph: {} }).peerMessaging.registry;
+  assert.equal(reg.truncated, true);
+  const carried = Object.values(reg.repos).reduce((n, list) => n + list.length, 0);
+  assert.ok(carried > 0, 'it degrades rather than blanking');
+  assert.ok(carried < 5 * 40, 'and it really did cut something');
+  const chars = JSON.stringify(reg.repos).length;
+  assert.ok(chars <= MAX_REGISTRY_CHARS * 1.1, `carried ${chars} chars`);
+});
+
+// Deterministic, so the same registry does not lose a different repo on every
+// tick — which would rebuild the board for ever.
+test('the cut is taken in repo key order, so it is the same one every tick', () => {
+  const h = harness();
+  const detail = 'y'.repeat(100000);
+  const repos = {
+    'zzz/last': [dirEntry({ sessionId: 'z', detail })],
+    'aaa/first': [dirEntry({ sessionId: 'a', detail })],
+    'mmm/middle': [dirEntry({ sessionId: 'm', detail })],
+  };
+  noteDirectory({ ok: true, repos }, 1);
+  const first = peerMessagingGraph({ host: h.host, graph: {} }).peerMessaging.registry;
+  const second = peerMessagingGraph({ host: h.host, graph: {} }).peerMessaging.registry;
+  assert.deepEqual(Object.keys(first.repos), Object.keys(second.repos));
+  assert.equal(Object.keys(first.repos)[0], 'aaa/first');
+  assert.equal(first.truncated, true);
 });

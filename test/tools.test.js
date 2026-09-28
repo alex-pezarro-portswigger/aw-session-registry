@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sendPeerMessageTool, listPeerSessionsTool } from '../lib/tools.js';
+import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from '../lib/tools.js';
 import { PeerMessageStore, MAX_BODY_CHARS } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
+import { onBeforeDispatch } from '../lib/hooks.js';
+import { clearPromptCwd } from '../lib/prompt-context.js';
+import { _resetGitNameCache, _setGitNameForTests } from '../lib/git-identity.js';
 
 const BASE = 'https://registry.example.test';
 const realFetch = globalThis.fetch;
@@ -41,17 +44,27 @@ function fakeGit(originUrl) {
   _setGitOriginForTests(async () => originUrl);
 }
 
+// Same seam for `git config user.name`.
+function fakeGitName(name) {
+  _setGitNameForTests(async () => name);
+}
+
 function text(result) {
   return result.content.map((c) => c.text).join('\n');
 }
 
-beforeEach(() => { _resetRepoKeyCache(); });
-afterEach(() => { globalThis.fetch = realFetch; _setGitOriginForTests(null); _resetRepoKeyCache(); });
+beforeEach(() => { _resetRepoKeyCache(); _resetGitNameCache(); fakeGitName(null); });
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  _setGitOriginForTests(null); _resetRepoKeyCache();
+  _setGitNameForTests(null); _resetGitNameCache();
+});
 
 // ── send_peer_message ────────────────────────────────────────────────────────
 
-test('send_peer_message resolves the caller"s repo, posts the right body, and logs it outbound', async () => {
+test('send_peer_message resolves the caller"s repo, sets fromDisplay from the git name, and logs it outbound', async () => {
   fakeGit('git@github.com:acme/app.git');
+  fakeGitName('Sam Rivera\n');
   const h = harness();
   h.stub(() => ({ json: { message: { id: 'srv-9' } } }));
   const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
@@ -62,15 +75,24 @@ test('send_peer_message resolves the caller"s repo, posts the right body, and lo
   // parameter through which to ask for anything else.
   assert.deepEqual(h.calls[0].body, {
     toRepo: 'acme/app', toHandle: 'peer-card', fromRepo: 'acme/app', fromHandle: 'card-1', body: 'ping',
+    fromDisplay: 'Sam Rivera',
   });
-  // fromOwnerKey/fromDisplay are OMITTED: the relay echoes an asserted identity
-  // without verifying it, so this does not assert one it cannot compute.
-  assert.equal('fromOwnerKey' in h.calls[0].body, false);
-  assert.equal('fromDisplay' in h.calls[0].body, false);
 
   assert.deepEqual(h.store.threadFor('card-1', 'peer-card').map((x) => [x.dir, x.body]), [['out', 'ping']]);
   assert.equal(h.rebuilds(), 1);
   assert.match(text(res), /has to approve it/);
+});
+
+test('omits fromDisplay entirely when no git name is configured', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  fakeGitName(null);
+  const h = harness();
+  h.stub(() => ({ json: { message: { id: 'srv-10' } } }));
+  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
+  assert.equal(res.isError, undefined);
+  // Absent, never '': the Go side treats an empty string as a clear.
+  assert.equal('fromDisplay' in h.calls[0].body, false);
+  assert.notEqual(h.calls[0].body.fromDisplay, '');
 });
 
 test('a caller whose folder is not a git checkout is told that, clearly', async () => {
@@ -91,12 +113,13 @@ test('an unknown or absent caller is refused rather than sent unattributed', asy
   assert.equal(h.calls.length, 0);
 });
 
-test('no registry URL is a plain error naming where a human sets one', async () => {
-  const h = harness({ registryUrl: null }); // null, not undefined: undefined hits the default parameter
+test('no configured registry URL uses the plugin default', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness({ registryUrl: null });
   h.stub(() => ({ json: {} }));
   const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x', text: 'y' });
-  assert.equal(res.isError, true);
-  assert.match(text(res), /Extensions tab/);
+  assert.equal(res.isError, undefined);
+  assert.match(h.calls[0].url, /^https:\/\/session-registry\.platform-dev\.portswigger\.io\//);
 });
 
 test('missing arguments and messaging yourself are refused before the network', async () => {
@@ -182,4 +205,62 @@ test('both tools declare a zod-shaped inputSchema the MCP SDK can register', () 
   assert.equal(typeof sendPeerMessageTool.inputSchema.to.parse, 'function');
   assert.equal(typeof sendPeerMessageTool.inputSchema.text.parse, 'function');
   assert.deepEqual(listPeerSessionsTool.inputSchema, {});
+});
+
+test('update_session_note writes only agent-supplied fields to this card', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  h.stub(() => ({ json: { session: { intent: 'make registry tools', detail: 'lib/tools.js' } } }));
+  const res = await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' },
+    { intent: 'make registry tools', detail: 'lib/tools.js' });
+  assert.equal(res.isError, undefined);
+  assert.equal(h.calls[0].url, `${BASE}/v1/sessions/card-1/note`);
+  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', intent: 'make registry tools', detail: 'lib/tools.js' });
+  assert.match(text(res), /make registry tools/);
+  assert.equal(h.store.isIntentNoted('card-1'), true);
+});
+
+test('a failed registry note leaves the prompt reminder armed', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  h.stub(() => ({ status: 503, json: { error: 'down' } }));
+  assert.equal((await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' }, { intent: 'work' })).isError, true);
+  assert.equal(h.store.isIntentNoted('card-1'), false);
+});
+
+test('a first-turn note resolves its repo before dispatch saves the card', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness({ sessions: {} });
+  h.stub(() => ({ json: { session: { intent: 'first turn' } } }));
+  onBeforeDispatch({ sessionId: 'card-early', cwd: '/w/app' });
+  const res = await updateSessionNoteTool.handler({ host: h.host, caller: 'card-early' }, { intent: 'first turn' });
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', intent: 'first turn' });
+  clearPromptCwd('card-early');
+});
+
+test('registry note tool refuses a stale repo or session id before writing', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  h.stub(() => ({ json: {} }));
+  for (const args of [{ repo: 'wrong/repo', intent: 'x' }, { session_id: 'other', intent: 'x' },
+    { messaging_handle: 'other', intent: 'x' }, { messaging_handle: 'card-1' }]) {
+    assert.equal((await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' }, args)).isError, true);
+  }
+  assert.equal(h.calls.length, 0);
+});
+
+test('list_repo_sessions includes handle-less and finished peers, with filters', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  const recent = new Date().toISOString();
+  h.stub(() => ({ json: { sessions: [
+    { sessionId: 'card-1', startedAt: recent },
+    { sessionId: 'peer-a', startedAt: recent, intent: 'work' },
+    { sessionId: 'peer-b', startedAt: recent, finishedAt: recent },
+  ] } }));
+  const all = JSON.parse(text(await listRepoSessionsTool.handler({ host: h.host, caller: 'card-1' })));
+  assert.deepEqual(all.sessions.map((s) => s.sessionId), ['peer-a', 'peer-b']);
+  const live = JSON.parse(text(await listRepoSessionsTool.handler({ host: h.host, caller: 'card-1' }, { live_only: true })));
+  assert.deepEqual(live.sessions.map((s) => s.sessionId), ['peer-a']);
 });

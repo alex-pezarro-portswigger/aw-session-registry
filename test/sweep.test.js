@@ -7,6 +7,7 @@ import { postmaster, _resetSweepState, SWEEP_MS, REPUBLISH_MS } from '../lib/swe
 import { PeerMessageStore, MAX_PENDING_PER_SESSION } from '../lib/store.js';
 import { setPerHandleFallback } from '../lib/registry.js';
 import { _resetRepoKeyCache } from '../lib/repo-key.js';
+import { directorySnapshot } from '../lib/directory.js';
 
 const BASE = 'https://registry.example.test';
 const realFetch = globalThis.fetch;
@@ -69,22 +70,23 @@ afterEach(() => { globalThis.fetch = realFetch; _resetSweepState(); setPerHandle
 
 // ── Inert ────────────────────────────────────────────────────────────────────
 
-test('no registry URL is WHOLLY inert, with one line per process and never per tick', async () => {
+test('no configured URL uses the plugin default', async () => {
   const h = harness({ registryUrl: null });
-  h.stub(() => { throw new Error('should not reach the network'); });
+  h.stub(() => ({ json: {} }));
   for (let i = 0; i < 5; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey });
-  assert.deepEqual(h.calls, []);
-  assert.equal(h.logs.length, 1, 'one line, not one per tick');
-  assert.match(h.logs[0], /no registry URL set/);
-  assert.equal(h.rebuilds(), 0);
+  assert.ok(h.calls.length > 0);
+  assert.equal(h.logs.length, 0);
 });
 
-test('a card with no resolvable repo has no peers and costs no request', async () => {
+// The DIRECTORY is cross-repo, so it is the one thing a board with no
+// repo-resolvable card still fetches: the view wants to see the registry even
+// when this board has nothing in it.
+test('a card with no resolvable repo costs no DRAIN, only the cross-repo directory', async () => {
   const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/tmp/scratch' }] });
   h.stub(() => ({ json: { messages: [] } }));
   await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
-  assert.deepEqual(h.calls, []);
-  assert.equal(h.rebuilds(), 0);
+  assert.deepEqual(h.calls, ['GET /v1/sessions']);
+  assert.equal(h.rebuilds(), 0, 'an empty registry is not a change');
 });
 
 test('an archived session is filtered out even though the projection already excludes it', async () => {
@@ -92,7 +94,7 @@ test('an archived session is filtered out even though the projection already exc
   h.host.sessions.list = () => [{ sessionId: 'card-1', cwd: '/w/app', archived: true }];
   h.stub(() => ({ json: { messages: [] } }));
   await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
-  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.calls.filter((c) => c !== 'GET /v1/sessions'), []);
 });
 
 // ── Drain ────────────────────────────────────────────────────────────────────
@@ -350,5 +352,171 @@ test('a failed ack does not throw, and the message stays stored for the retry', 
     : { json: { messages: [envelope()] } }));
   await assert.doesNotReject(() => postmaster({ host: h.host, now: 0, repoKey: h.repoKey }));
   assert.equal(h.store.pendingFor('card-1').length, 1);
+  assert.match(h.logs[0], /unreachable/);
+});
+
+// ── The cross-repo directory (the Session registry view) ────────────────────
+
+function dirEntry(over = {}) {
+  return {
+    sessionId: 'sess-1', origin: 'local', intent: 'wiring the drain', detail: '',
+    branch: 'main', startedAt: '2026-09-20T09:00:00Z', finishedAt: null,
+    messagingHandle: 'peer-card', owner: 'Sam Rivera', ...over,
+  };
+}
+
+// Answers the drain like every other stub here, and the directory with a real
+// payload.
+function withDirectory(repos) {
+  return (target) => (target.includes('/v1/sessions') ? { json: { repos, since: '24h0m0s' } } : { json: { messages: [] } });
+}
+
+test('the directory is fetched once per real drain tick, even with no repo-resolvable cards', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/tmp/scratch' }] });
+  h.stub(withDirectory({ 'acme/app': [dirEntry()] }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c === 'GET /v1/sessions').length, 2, 'one per tick, not one per repo');
+  assert.deepEqual(Object.keys(directorySnapshot().repos), ['acme/app']);
+});
+
+test('pollSeconds gates the directory fetch too', async () => {
+  const h = harness({ pollSeconds: 45 });
+  h.stub(withDirectory({}));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  await postmaster({ host: h.host, now: 2 * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c === 'GET /v1/sessions').length, 1);
+});
+
+// The same guarantee the drain has: a rebuild ONLY if something moved.
+test('a changed directory rebuilds; an identical one does not', async () => {
+  const h = harness();
+  h.stub(withDirectory({ 'acme/app': [dirEntry()] }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.rebuilds(), 1);
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.rebuilds(), 1, 'the same rows on the 15s tick are not a board change');
+  h.stub(withDirectory({ 'acme/app': [dirEntry(), dirEntry({ sessionId: 'sess-2' })] }));
+  await postmaster({ host: h.host, now: 2 * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.rebuilds(), 2);
+});
+
+test('a directory failure is a reachability transition, logged once over four ticks', async () => {
+  const h = harness();
+  // The drain is fine; only the directory is down. It must still be exactly
+  // one line, because "the registry is unreachable" is a state, not an event.
+  h.stub((target) => (target.includes('/v1/sessions') ? new Error('ECONNREFUSED') : { json: { messages: [] } }));
+  for (let i = 0; i < 4; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey });
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /unreachable/);
+});
+
+test('a directory failure after a good fetch keeps the last snapshot for the view', async () => {
+  const h = harness();
+  h.stub(withDirectory({ 'acme/app': [dirEntry()] }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  h.stub((target) => (target.includes('/v1/sessions') ? new Error('ECONNREFUSED') : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: SWEEP_MS, repoKey: h.repoKey });
+  const snap = directorySnapshot();
+  assert.deepEqual(Object.keys(snap.repos), ['acme/app'], 'stale beats blank');
+  assert.equal(snap.fetchedAt, 0, 'and the "as of" is the last SUCCESSFUL fetch');
+  assert.match(snap.error, /ECONNREFUSED/);
+});
+
+// The directory call is after the drain loop, so it cannot get between a
+// persist and its ack.
+test('the directory fetch comes last, after every drain and ack', async () => {
+  const h = harness();
+  h.stub((target) => (target.includes('/v1/sessions') ? { json: { repos: {} } } : { json: { messages: [envelope()], acked: 1 } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.calls.at(-1), 'GET /v1/sessions');
+});
+
+// ── A card with no ledger entry must not look like an outage ─────────────────
+// `postNote` sends no `origin`, so the registry refuses to create an entry and
+// answers 404 for a card with no row. The sweep repairs that by registering,
+// but counting the 404 as unreachable would peg a healthy registry to "down".
+
+const git = {
+  gitBranch: async () => 'feat/x',
+  gitIdentity: async () => ({ name: 'Sam Rivera', email: 'sam@example.com' }),
+};
+
+test('a 404 from the re-assert does NOT mark the registry unreachable', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 404, json: { error: 'no such session on this repo, and no origin was supplied to create one' } }
+    : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  // note → 404 → register → note, and the SECOND 404 is still not an outage.
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 2, 'it tried, repaired, and tried again');
+  assert.deepEqual(h.logs, [], 'a 404 is a fact about the card, not about the service');
+});
+
+test('step 8 happy path: one note per live card, and no register', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/w/app' }, { sessionId: 'card-2', cwd: '/w/app' }] });
+  h.stub(() => ({ json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  assert.equal(h.calls.filter((c) => c.endsWith('/note')).length, 2);
+  assert.equal(h.calls.filter((c) => c === 'POST /v1/sessions').length, 0);
+});
+
+// A 404 proves the row is absent — a restarted registry lost its ledger — so
+// the repair re-registers with the card's own intent, then notes again.
+test('repair path: a note 404 re-registers the row with the card facts, then re-notes', async () => {
+  const card = { sessionId: 'card-1', cwd: '/w/app', intent: 'wire the drain', name: 'Drain', worktree: { branch: 'wt/d' }, runtime: 'devcontainer' };
+  const h = harness({ sessions: [card] });
+  const bodies = [];
+  let registered = false;
+  h.stub((target, opts) => {
+    if (opts.method !== 'POST') return { json: { messages: [] } };
+    bodies.push({ path: new URL(target).pathname, body: JSON.parse(opts.body) });
+    if (target.endsWith('/v1/sessions')) { registered = true; return { json: {} }; }
+    return registered ? { json: {} } : { status: 404, json: { error: 'no such session' } };
+  });
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  assert.deepEqual(bodies.map((b) => b.path), ['/v1/sessions/card-1/note', '/v1/sessions', '/v1/sessions/card-1/note']);
+  assert.deepEqual(bodies[1].body, {
+    repo: 'acme/app', sessionId: 'card-1', origin: 'local', branch: 'feat/x',
+    intent: 'wire the drain', detail: 'Agent Wrangler card · cwd /w/app · worktree wt/d · task Drain',
+    ownerName: 'Sam Rivera', ownerEmail: 'sam@example.com',
+  });
+  assert.deepEqual(h.logs, [], 'the repair logs nothing');
+});
+
+test('a thrown fetch on the re-assert IS an outage: one line, then down→down is silent', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note') ? new Error('ECONNREFUSED') : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey, ...git });
+  await postmaster({ host: h.host, now: REPUBLISH_MS, repoKey: h.repoKey, ...git });
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /unreachable/);
+});
+
+// Left unguarded, the up-transition's `lastPublishAt = null` would fire off the
+// back of those 404s and re-run the whole per-card loop on the very next tick —
+// the POST-per-card trickle REPUBLISH_MS exists to prevent.
+test('404s do not re-arm the republish clock, so the slow cadence holds', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/w/app' }, { sessionId: 'card-2', cwd: '/w/app' }] });
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 404, json: { error: 'no such session' } }
+    : { json: { messages: [] } }));
+  for (let i = 0; i < 6; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey, ...git });
+  // Two notes per card (the note and the repair's re-note) on the first tick,
+  // and nothing on the next five inside REPUBLISH_MS.
+  assert.equal(h.calls.filter((c) => c.includes('/note')).length, 4, 'once per card (plus its repair), not once per card per tick');
+  assert.equal(h.calls.filter((c) => c === 'POST /v1/sessions').length, 2);
+});
+
+// The silence is scoped to 404 alone: a registry that is genuinely refusing
+// writes still has to show up as down.
+test('a 500 from the re-assert IS still an outage', async () => {
+  const h = harness();
+  h.stub((target, opts) => (opts.method === 'POST' && target.includes('/note')
+    ? { status: 500, json: { error: 'boom' } }
+    : { json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.logs.length, 1);
   assert.match(h.logs[0], /unreachable/);
 });

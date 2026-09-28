@@ -22,7 +22,6 @@ function envelope(over = {}) {
     fromHandle: 'peer-card',
     fromRepo: 'acme/app',
     fromDisplay: 'Sam Rivera',
-    fromOwnerKey: '1a2b3c4d5e6f7a8b',
     body: 'hold off on hooks/spawn-runner?',
     createdAt: '2026-09-18T10:00:00Z',
     ...over,
@@ -257,6 +256,18 @@ test('the peer"s asserted display name is remembered on the channel', () => {
 });
 
 // ── Session lifecycle ────────────────────────────────────────────────────────
+
+test('an early agent note persists and clears on purge', () => {
+  const file = tmpFile();
+  const s = store(file);
+  assert.equal(s.isIntentNoted('card-1'), false);
+  assert.equal(s.markIntentNoted('card-1'), true);
+  const reloaded = store(file);
+  assert.equal(reloaded.isIntentNoted('card-1'), true);
+  assert.equal(reloaded.markIntentNoted('card-1'), false);
+  assert.equal(reloaded.forgetSession('card-1'), true);
+  assert.equal(store(file).isIntentNoted('card-1'), false);
+});
 
 test('archive drops pending and every standing approval, keeps threads and seen', () => {
   const s = store();

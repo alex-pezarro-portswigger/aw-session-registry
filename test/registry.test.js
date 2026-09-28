@@ -1,7 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  postNote, listSessions, send, drain, ack,
+  postNote, postRegister, postCloseOut, listSessions, listAllSessions, send, drain, ack,
   setPerHandleFallback, usingPerHandleFallback,
   MAX_HANDLES_PER_DRAIN, MAX_IDS_PER_ACK,
 } from '../lib/registry.js';
@@ -32,7 +32,7 @@ afterEach(() => { globalThis.fetch = realFetch; setPerHandleFallback(false); });
 
 // ── postNote ─────────────────────────────────────────────────────────────────
 
-test('postNote posts exactly the three fields the note endpoint accepts', async () => {
+test('postNote posts exactly the two fields it has any business sending', async () => {
   stub(() => ({ json: { session: {} } }));
   const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
   assert.equal(res.ok, true);
@@ -41,8 +41,56 @@ test('postNote posts exactly the three fields the note endpoint accepts', async 
   assert.equal(calls[0].headers['content-type'], 'application/json');
   // intent and detail are OMITTED, never sent empty: they are *string on the Go
   // side, so an empty string would CLEAR agent-authored text.
-  assert.deepEqual(Object.keys(calls[0].body).sort(), ['messagingHandle', 'origin', 'repo']);
-  assert.equal(calls[0].body.origin, 'local');
+  assert.deepEqual(Object.keys(calls[0].body).sort(), ['messagingHandle', 'repo']);
+});
+
+test('postNote lets the agent update intent and detail without clearing the handle', async () => {
+  stub(() => ({ json: { session: { intent: 'new goal', detail: 'lib/tools.js' } } }));
+  await postNote(BASE, 'card-1', { repo: 'acme/app', intent: 'new goal', detail: 'lib/tools.js' });
+  assert.deepEqual(calls[0].body, { repo: 'acme/app', intent: 'new goal', detail: 'lib/tools.js' });
+  await postNote(BASE, 'card-1', { repo: 'acme/app', detail: '' });
+  assert.deepEqual(calls[1].body, { repo: 'acme/app', detail: '' });
+});
+
+// THE REGRESSION THIS GUARDS: `origin` is what switches the note endpoint's
+// upsert into a CREATE, and this extension notes every live card in a git repo.
+// Sending it minted a shell ledger row — empty intent, empty detail, empty
+// branch, no owner — for every card that had never registered. `NoteRequest`
+// cannot carry branch or owner fields at all, so the row could never be filled
+// in afterwards.
+test('postNote NEVER sends origin — that is what created blank ledger entries', async () => {
+  stub(() => ({ json: {} }));
+  await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+  assert.equal('origin' in calls[0].body, false);
+  // Not even when a caller tries to pass one: the option is gone, so an
+  // `origin` in the options object must not reach the wire.
+  await postNote(BASE, 'card-2', { repo: 'acme/app', messagingHandle: 'card-2', origin: 'local' });
+  assert.equal('origin' in calls[1].body, false);
+});
+
+// With no origin the create path is closed, so the registry answers 404 for a
+// card it has never heard of. Callers need to tell that apart from an outage,
+// and `status === 404` at three call sites is a detail this module owns.
+test('a 404 comes back flagged notFound, so callers need not read a status code', async () => {
+  stub(() => ({ status: 404, json: { error: 'no such session on this repo, and no origin was supplied to create one' } }));
+  const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+  assert.equal(res.ok, false);
+  assert.equal(res.notFound, true);
+  assert.match(res.error, /no such session on this repo/);
+});
+
+test('notFound is false for every other failure, so an outage is never read as a missing entry', async () => {
+  for (const status of [400, 500, 503]) {
+    stub(() => ({ status, json: { error: 'boom' } }));
+    const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+    assert.equal(res.ok, false, `status ${status}`);
+    assert.equal(res.notFound, false, `status ${status}`);
+  }
+  // A thrown fetch (refused, DNS, timeout) has no status at all.
+  stub(() => new Error('ECONNREFUSED'));
+  const res = await postNote(BASE, 'card-1', { repo: 'acme/app', messagingHandle: 'card-1' });
+  assert.equal(res.ok, false);
+  assert.ok(!res.notFound);
 });
 
 test('postNote url-encodes the card id into the path', async () => {
@@ -241,4 +289,87 @@ test('acking nothing is a no-op, not a request', async () => {
   assert.deepEqual(await ack(BASE, 'acme/app', []), { ok: true, acked: 0 });
   assert.deepEqual(await ack(BASE, 'acme/app', [{ id: '' }, null]), { ok: true, acked: 0 });
   assert.equal(calls.length, 0);
+});
+
+// ── listAllSessions ──────────────────────────────────────────────────────────
+
+test('listAllSessions hits GET /v1/sessions and returns the repo map', async () => {
+  stub(() => ({ json: { repos: { 'acme/app': [{ sessionId: 'a' }] }, since: '24h0m0s' } }));
+  const res = await listAllSessions(BASE);
+  assert.equal(res.ok, true);
+  assert.equal(calls[0].url, `${BASE}/v1/sessions`);
+  assert.equal(calls[0].method, 'GET');
+  assert.deepEqual(calls[0].headers, {}, 'a GET carries no body and so no content-type');
+  assert.equal(calls[0].body, null);
+  assert.deepEqual(res.repos, { 'acme/app': [{ sessionId: 'a' }] });
+});
+
+// The graph tick may not throw, so nothing malformed may reach it.
+test('listAllSessions normalises a missing or non-object repos to an empty map', async () => {
+  for (const json of [{}, { repos: null }, { repos: [] }, { repos: 'nope' }, { repos: 7 }]) {
+    stub(() => ({ json }));
+    assert.deepEqual((await listAllSessions(BASE)).repos, {}, JSON.stringify(json));
+  }
+  stub(() => ({ json: { repos: { 'acme/app': 'not an array', 'acme/other': [{ sessionId: 'b' }] } } }));
+  assert.deepEqual((await listAllSessions(BASE)).repos, { 'acme/app': [], 'acme/other': [{ sessionId: 'b' }] });
+});
+
+test('a network failure from listAllSessions is {ok:false}, never a throw', async () => {
+  stub(() => new Error('ECONNREFUSED'));
+  const res = await listAllSessions(BASE);
+  assert.equal(res.ok, false);
+  assert.match(res.error, /ECONNREFUSED/);
+});
+
+test('a 500 from listAllSessions carries the registry"s own reason and status', async () => {
+  stub(() => ({ status: 500, json: { error: 'list failed' } }));
+  const res = await listAllSessions(BASE);
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 500);
+  assert.match(res.error, /list failed/);
+});
+
+test('an unusable base URL is an error rather than a fetch, here too', async () => {
+  stub(() => ({ json: {} }));
+  assert.equal((await listAllSessions('file:///etc/passwd')).ok, false);
+  assert.equal(calls.length, 0);
+});
+
+// ── postRegister / postCloseOut ──────────────────────────────────────────────
+
+test('postRegister posts the required three plus only the non-empty optionals', async () => {
+  stub(() => ({ json: { session: {} } }));
+  const res = await postRegister(BASE, 'card-1', {
+    repo: 'acme/app', origin: 'local', branch: 'feat/x', intent: 'wiring', detail: '',
+    ownerName: 'Sam', ownerEmail: '',
+  });
+  assert.equal(res.ok, true);
+  assert.equal(calls[0].url, `${BASE}/v1/sessions`);
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(calls[0].body, { repo: 'acme/app', sessionId: 'card-1', origin: 'local', branch: 'feat/x', intent: 'wiring', ownerName: 'Sam' });
+  await postRegister(BASE, 'card-2', { repo: 'acme/app', origin: 'runner', branch: null, intent: '', detail: '', ownerName: '', ownerEmail: '' });
+  assert.deepEqual(calls[1].body, { repo: 'acme/app', sessionId: 'card-2', origin: 'runner' }, 'empty is omitted, never sent as ""');
+});
+
+test('postRegister refuses locally without cardId, repo or origin', async () => {
+  stub(() => ({ json: {} }));
+  for (const [id, opts] of [['', { repo: 'a/b', origin: 'local' }], ['c', { origin: 'local' }], ['c', { repo: 'a/b' }]]) {
+    assert.equal((await postRegister(BASE, id, opts)).ok, false);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('postCloseOut posts {repo} plus branch only when non-empty', async () => {
+  stub(() => ({ json: {} }));
+  await postCloseOut(BASE, 'card-1', { repo: 'acme/app', branch: 'feat/x' });
+  await postCloseOut(BASE, 'card-1', { repo: 'acme/app', branch: '' });
+  assert.equal(calls[0].url, `${BASE}/v1/sessions/card-1/close-out`);
+  assert.deepEqual(calls[0].body, { repo: 'acme/app', branch: 'feat/x' });
+  assert.deepEqual(calls[1].body, { repo: 'acme/app' });
+});
+
+test('a 404 from either new call is notFound and never throws', async () => {
+  stub(() => ({ status: 404, json: { error: 'no such session' } }));
+  assert.equal((await postRegister(BASE, 'c', { repo: 'a/b', origin: 'local' })).notFound, true);
+  assert.equal((await postCloseOut(BASE, 'c', { repo: 'a/b' })).notFound, true);
 });

@@ -32,9 +32,6 @@
 
 .peer-msg-from { font-size: 13px; }
 .peer-from-name { font-weight: 600; color: var(--fg); }
-/* "self-reported": the relay echoes whatever a sender asserted and verifies
- * none of it, so the qualifier is deliberately not styled away to nothing. */
-.peer-claim { font-size: 11px; color: var(--fg-subtle); }
 
 .peer-msg-meta { font-size: 11px; color: var(--fg-muted); }
 .peer-handle { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
@@ -94,3 +91,102 @@
   background: var(--warn); color: var(--bar-on); font-weight: 600;
 }
 .peer-pill-open { padding: 1px 4px; color: var(--fg-subtle); }
+
+/* ── The Session registry view ──────────────────────────────────────────────
+ * A top-level board view, so it owns a whole page rather than a panel strip —
+ * hence the max-width and the centring, which nothing else in this file needs.
+ * Board tokens only, exactly as above: this page mirrors the registry's own
+ * dashboard, and the dashboard's colours are NOT copied here, because a view
+ * that did not follow the board's theme switch would be the one thing on
+ * screen that looked wrong in half of them. */
+
+.peer-dir { max-width: 60rem; margin: 0 auto; padding: 2rem 1.25rem; font: inherit; color: var(--fg); }
+/* Scoped, so nothing here can hide a core element that happens to carry the
+ * attribute. */
+.peer-dir [hidden] { display: none; }
+
+.peer-dir-head { display: flex; flex-direction: column; gap: 4px; }
+.peer-dir-title { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: 0.01em; }
+.peer-dir-meta { margin: 0; font-size: 0.8rem; color: var(--fg-muted); }
+
+.peer-dir-notes { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.peer-dir-notes:empty { display: none; }
+
+.peer-dir-controls {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+  margin: 16px 0 4px; padding-bottom: 12px; border-bottom: 1px solid var(--border-muted);
+}
+.peer-dir-control { display: flex; align-items: center; gap: 6px; }
+.peer-dir-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--fg-muted);
+}
+.peer-dir-controls select {
+  font: inherit; font-size: 12px; padding: 3px 6px;
+  background: var(--field-bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 5px;
+}
+.peer-dir-summary { font-size: 0.8rem; color: var(--fg-muted); }
+
+.peer-dir-body { display: flex; flex-direction: column; }
+.peer-dir-repo { padding: 26px 0 10px; border-top: 1px solid var(--border-muted); }
+.peer-dir-repo:first-child { border-top: none; }
+.peer-dir-repo-name {
+  margin: 0 0 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95rem; font-weight: 600;
+}
+.peer-dir-ended-heading {
+  margin: 20px 0 12px; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-muted);
+}
+.peer-dir-live, .peer-dir-ended { display: flex; flex-direction: column; gap: 12px; }
+
+.peer-dir-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface);
+}
+/* Accent-edged while there is no recorded end — the dashboard's own signal,
+ * in the board's colour. */
+.peer-dir-live .peer-dir-card { border-left: 3px solid var(--accent); }
+.peer-dir-ended .peer-dir-card { opacity: 0.6; }
+
+.peer-dir-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; justify-content: space-between; }
+.peer-dir-intent { margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--fg); }
+/* Start and end as one group, so the pair stays together when the row wraps. */
+.peer-dir-times { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 11px; color: var(--fg-muted); }
+.peer-dir-started { white-space: nowrap; }
+/* An empty intent is shown as an absence rather than skipped: a session that
+ * never said what it was for is worth seeing as such. */
+.peer-dir-intent.absent { font-style: italic; color: var(--fg-subtle); }
+.peer-dir-chip {
+  flex: none; padding: 1px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; white-space: nowrap;
+  background: var(--surface-2); color: var(--fg-muted);
+}
+.peer-dir-live .peer-dir-chip { color: var(--accent); }
+
+.peer-dir-cardmeta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+  font-size: 11px; color: var(--fg-muted);
+}
+/* A missing author is stated, in the same italic the missing intent uses. */
+.peer-dir-owner.absent { font-style: italic; color: var(--fg-subtle); }
+.peer-dir-branch { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.peer-dir-details { margin-top: 2px; }
+.peer-dir-details-summary { cursor: pointer; font-size: 0.8rem; color: var(--fg-muted); }
+/* Newlines in agent-authored detail are kept by CSS, never by emitting markup
+ * around the text. */
+.peer-dir-detail {
+  margin: 10px 0 0; font-size: 12px; line-height: 1.45; color: var(--fg);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* The board's own card. Clickable — it selects the session and returns to the
+ * grid — so it says so with a cursor and a hover edge. */
+.peer-dir-mine { cursor: pointer; }
+.peer-dir-mine:hover { border-color: var(--fg-subtle); }
+
+.peer-dir-nomatch, .peer-dir-empty { margin: 18px 0 0; font-size: 0.85rem; color: var(--fg-muted); }
+.peer-dir-empty:empty { display: none; }
