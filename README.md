@@ -95,6 +95,8 @@ row.
 Requires a wrangler serving host API **`^1.11.0`** for native
 `UserPromptSubmit` context injection. An older wrangler refuses to load the
 extension rather than silently omitting the reminder.
+Codex may ask the user to trust Wrangler's generated prompt hook command;
+the extension cannot bypass that native review.
 
 ### Settings
 

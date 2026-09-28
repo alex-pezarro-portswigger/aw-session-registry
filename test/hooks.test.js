@@ -168,12 +168,14 @@ test('the first prompt receives the registry brief as context, without a separat
   globalThis.fetch = async (target, opts = {}) => {
     h.calls.push({ url: String(target), body: JSON.parse(opts.body) });
     return { ok: true, status: 200, json: async () => String(target).endsWith('/v1/brief')
-      ? { hookSpecificOutput: { additionalContext: '2 other sessions on acme/app' } }
+      ? { hookSpecificOutput: { additionalContext: '2 other sessions on acme/app\n    SendMessage to "peer-card"\n\nYou should set your intent with update_session_note now, before you edit, and\nPass messaging_handle from ListAgents.' } }
       : { session: {} } };
   };
   const first = await onPrompt({ sessionId: 'card-1', cwd: '/w/app', entry: null, prompt: 'start work', host: h.host });
   assert.match(first.additionalContext, /2 other sessions on acme\/app/);
   assert.match(first.additionalContext, /untrusted/);
+  assert.match(first.additionalContext, /send_peer_message to "peer-card"/);
+  assert.doesNotMatch(first.additionalContext, /ListAgents|SendMessage to/);
   assert.equal(h.calls[0].url, `${BASE}/v1/brief`);
   assert.equal(h.calls[0].body.onlyIfUnbriefed, true);
   assert.deepEqual(delivered, []);
