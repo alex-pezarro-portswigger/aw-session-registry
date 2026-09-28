@@ -44,6 +44,14 @@ test('postNote posts exactly the two fields it has any business sending', async 
   assert.deepEqual(Object.keys(calls[0].body).sort(), ['messagingHandle', 'repo']);
 });
 
+test('postNote lets the agent update intent and detail without clearing the handle', async () => {
+  stub(() => ({ json: { session: { intent: 'new goal', detail: 'lib/tools.js' } } }));
+  await postNote(BASE, 'card-1', { repo: 'acme/app', intent: 'new goal', detail: 'lib/tools.js' });
+  assert.deepEqual(calls[0].body, { repo: 'acme/app', intent: 'new goal', detail: 'lib/tools.js' });
+  await postNote(BASE, 'card-1', { repo: 'acme/app', detail: '' });
+  assert.deepEqual(calls[1].body, { repo: 'acme/app', detail: '' });
+});
+
 // THE REGRESSION THIS GUARDS: `origin` is what switches the note endpoint's
 // upsert into a CREATE, and this extension notes every live card in a git repo.
 // Sending it minted a shell ledger row — empty intent, empty detail, empty

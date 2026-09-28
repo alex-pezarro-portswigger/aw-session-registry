@@ -37,7 +37,10 @@ one.
 
 - Publishes each live card's **messaging handle** (its card id) to the registry,
   so peers in the same repo can address it.
-- Gives an agent two MCP tools: `list_peer_sessions` and `send_peer_message`.
+- Gives an agent four MCP tools: `list_peer_sessions`, `send_peer_message`,
+  `list_repo_sessions` and `update_session_note`.
+- Adds the registry's peer brief to the first prompt. The first three prompts
+  carry a same-prompt reminder until the agent updates its note.
 - Drains inbound messages on a 15-second sweep, stores them, and **acks the
   relay only after they are on disk**.
 - Puts every unapproved message behind a click on the card: **Allow once ·
@@ -86,19 +89,20 @@ install flow requires (it refuses a repo without one *before* showing you the
 disclosure, because an unpinned dependency set cannot be disclosed honestly).
 
 It arrives **switched off**: it reaches a network host, so it has to be chosen
-rather than inherited. Turn it on and set the registry URL from the cog on its
-row.
+rather than inherited. Turn it on in the Extensions tab. It uses the same
+registry URL as the marketplace plugin by default.
 
-Requires a wrangler serving host API **`^1.2.0`** — 1.1.0 for `host.settings`,
-1.2.0 for the client-side `onMessage` seam the panel uses for its live
-confirmations. An older wrangler refuses to load it rather than dropping those
-frames silently.
+Requires a wrangler serving host API **`^1.12.0`** for declared native hooks.
+The extension discloses `UserPromptSubmit` and `PostToolUse` during install.
+An older wrangler refuses to load it.
+Codex may ask the user to trust Wrangler's generated prompt hook command;
+the extension cannot bypass that native review.
 
 ### Settings
 
 | Setting | What it does |
 |---|---|
-| **Session registry URL** | Where to relay through. Unset, the extension is **completely inert**: it publishes nothing, fetches nothing and delivers nothing (one log line per process saying so). |
+| **Session registry URL** | Overrides the marketplace plugin's default registry URL. |
 | **How often to check for messages** | Seconds. **15 is the floor and the granularity** — the check is wired to a fixed 15-second timer, so a larger number makes it *less* frequent and anything at or below 15 means every time. |
 
 The 15-second floor is not a soft target: `everyMs` is fixed when the manifest
@@ -132,7 +136,8 @@ extension owns that row from start to end:
 
 - **Dispatch** registers it (origin, branch, git owner, the card's intent, and a
   one-line detail naming it as an Agent Wrangler card), then notes the card id
-  on as its messaging handle.
+  on as its messaging handle. The first prompt also asks the registry for its
+  one-shot peer brief before the model request.
 - **Resume** re-registers with no intent or detail, so whatever the agent wrote
   survives, while the branch is refreshed and a closed-out row is reopened.
 - **Archive** closes the row out and clears the handle.
@@ -144,22 +149,44 @@ the registry, never stored raw); the registry is unauthenticated behind an
 ingress CIDR allowlist, so treat what is written there as visible to anything
 that can reach it.
 
-### Two registry rows for one piece of work
+`update_session_note` can replace the dispatch intent and detail when the agent
+has a concrete plan; `list_repo_sessions` reads all recent peers, including
+those with no messaging handle. Both tools derive the repo and card id from the
+calling Wrangler session. The optional `repo` and `session_id` arguments exist
+for compatibility with the standalone plugin and are checked against the card.
+The messaging handle is always the card id, because that is what this board can
+deliver to.
 
-A Claude Code hook may already hold a registry row for the same work, keyed on
-the **conversation** id. The row this extension publishes is keyed on the
-**card** id, and that is the *addressable* one — it is what `list_peer_sessions`
-returns and what a message can be sent to.
+Like the plugin, the extension uses a native `UserPromptSubmit` command hook
+to attach the reminder to the prompt being submitted, up to three times.
+Its `PostToolUse` hook switches the reminder off after an
+`update_session_note` call. The marker records the call even if the tool
+reported an error, matching the marketplace plugin. The count and marker live
+in the agent's writable data across resumes. Prompts in a folder without a git
+origin do not spend a reminder.
 
-A companion change to the `session-registry` plugin collapses this for Claude
-cards: with `AW_SESSION_ID` in the hook's session-id precedence, the hook's rich
-registration and this extension's handle land on one row keyed on the card id.
-Nothing here depends on that change — the registry merges registrations per
-field, so whichever lands second fills gaps rather than overwriting.
+The same hook attaches the registry's peer brief to the first prompt, using
+the card id and the registry's one-shot gate. `onBeforeDispatch` records the
+card's cwd before launch so a first-turn `update_session_note` call can
+resolve its repo. If the standalone plugin is installed, its `SessionStart`
+hook also runs; duplicate brief context is possible because that hook does not
+use the extension's one-shot gate.
 
-Without it, two rows for one piece of work is the price of the card id being the only stable
-handle the wrangler owns. The conversation id is deliberately not available to an
-extension at all: `host-api/project.js` withholds it precisely because it is
+On the host, the command hook reads a custom registry URL from Wrangler's
+`config.json` under `extensionSettings.peer-messaging.registryUrl`. In a
+devcontainer, the host config file is unavailable, so the command uses
+`SESSION_REGISTRY_URL` if inherited and otherwise the marketplace default.
+Set that environment variable when using a custom URL in a devcontainer.
+
+### One registry row per Wrangler card
+
+The extension publishes a row keyed on the **card** id. That is the
+addressable handle `list_peer_sessions` returns.
+
+The marketplace plugin now uses `AW_SESSION_ID` before the conversation id,
+so its registration and this extension's handle land on the same card row.
+The conversation id is deliberately not available to an extension:
+`host-api/project.js` withholds it precisely because it is
 `--resume`-able, which would reach a conversation outside the board's lifecycle.
 
 ### A wrangler that is off for a day loses messages
@@ -240,8 +267,11 @@ mechanism.
 | `lib/registry.js` | The HTTP client. Every function returns `{ok, …}` and never throws. |
 | `lib/repo-key.js` | `<owner>/<repo>`, reimplementing the registry's own Go normalisation. |
 | `lib/framing.js` | The `[peer message · untrusted · …]` frame and its marker escaping. |
-| `lib/hooks.js` | Handle publication (non-blocking) and archive/purge cleanup. |
-| `lib/tools.js` | `send_peer_message`, `list_peer_sessions`. |
+| `lib/hooks.js` | Card registration, early cwd capture, handle publication and archive/purge cleanup. |
+| `skills/session-registry/hooks/` | Native prompt brief and reminder plus the note-call marker. |
+| `lib/prompt-context.js` | Short-lived cwd for tool calls before dispatch saves the card. |
+| `lib/tools.js` | Peer messaging and registry MCP tools. |
+| `skills/session-registry/` | Bundled skill and native hook plugin for note and peer checks. |
 | `lib/handlers.js` | The six control handlers behind the buttons. |
 | `lib/graph.js` | The `graph.peerMessaging` contributor. |
 | `lib/directory.js` | The last directory fetch, held for the graph. Pure module state; the sweep writes it, the graph reads it. |

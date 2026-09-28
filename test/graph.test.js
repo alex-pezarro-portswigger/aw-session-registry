@@ -132,9 +132,9 @@ test('a body-heavy BOARD degrades to counts rather than a vast graph, and SAYS s
   for (const c of cards) assert.equal(g.bySession[c].pending, MAX_PENDING_PER_SESSION);
 });
 
-test('configured says whether there is anywhere to look', () => {
+test('the marketplace default gives the extension a registry URL', () => {
   assert.equal(peerMessagingGraph({ host: harness().host, graph: {} }).peerMessaging.configured, true);
-  assert.equal(peerMessagingGraph({ host: harness({ registryUrl: null }).host, graph: {} }).peerMessaging.configured, false);
+  assert.equal(peerMessagingGraph({ host: harness({ registryUrl: null }).host, graph: {} }).peerMessaging.configured, true);
 });
 
 test('registryUp is null until the sweep has tried, then whatever it last saw', () => {

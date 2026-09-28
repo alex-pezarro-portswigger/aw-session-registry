@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { onDispatch, onResume, onArchive, onPurge } from '../lib/hooks.js';
+import { onBeforeDispatch, onDispatch, onResume, onArchive, onPurge } from '../lib/hooks.js';
+import { promptCwdFor } from '../lib/prompt-context.js';
 import { PeerMessageStore } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
 import { _setGitBranchForTests, _setGitIdentityForTests } from '../lib/git-facts.js';
@@ -89,6 +90,15 @@ test('onResume returns undefined too', () => {
   assert.equal(onResume({ sessionId: 'card-1', entry: { cwd: '/w/app' }, reason: 'message', host: h.host }), undefined);
 });
 
+test('onBeforeDispatch retains cwd for an MCP tool call before the card is saved', () => {
+  onBeforeDispatch({ sessionId: 'card-early', cwd: '/w/app' });
+  assert.equal(promptCwdFor('card-early'), '/w/app');
+  const h = harness();
+  okFetch(h.calls);
+  onDispatch({ sessionId: 'card-early', entry: { cwd: '/w/app' }, host: h.host });
+  assert.equal(promptCwdFor('card-early'), null);
+});
+
 test('a hook whose POST never settles still returns immediately', async () => {
   const h = harness();
   hangingFetch(h.calls);
@@ -139,6 +149,18 @@ test('onDispatch registers THEN notes, with the card intent, a one-line detail, 
   assert.doesNotMatch(h.calls[0].body.detail, /\n/);
 });
 
+test('an agent note written on the first prompt is not overwritten by dispatch', async () => {
+  const h = harness();
+  okFetch(h.calls);
+  onBeforeDispatch({ sessionId: 'card-1', cwd: '/w/app' });
+  h.store.markIntentNoted('card-1');
+  onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app', intent: 'stale launch intent' }, host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  const registration = h.calls.find((c) => c.url === `${BASE}/v1/sessions`);
+  assert.equal('intent' in registration.body, false);
+  assert.equal('detail' in registration.body, false);
+});
+
 test('onResume registers then notes with intent and detail ABSENT, so the agent text survives', async () => {
   const h = harness();
   okFetch(h.calls);
@@ -175,12 +197,12 @@ test('a register failure still attempts the note, and logs one line', async () =
   assert.match(h.logs[0], /could not register/);
 });
 
-test('no registry URL publishes nothing and says nothing — dispatch is far too frequent for a line', async () => {
+test('no configured URL uses the marketplace plugin default', async () => {
   const h = harness({ registryUrl: null });
   okFetch(h.calls);
   onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
   await new Promise((r) => setTimeout(r, 20));
-  assert.deepEqual(h.calls, []);
+  assert.equal(h.calls.length, 2);
   assert.deepEqual(h.logs, []);
 });
 
