@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { onDispatch, onResume, onPrompt, onArchive, onPurge } from '../lib/hooks.js';
+import { onBeforeDispatch, onDispatch, onResume, onArchive, onPurge } from '../lib/hooks.js';
+import { promptCwdFor } from '../lib/prompt-context.js';
 import { PeerMessageStore } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
 import { _setGitBranchForTests, _setGitIdentityForTests } from '../lib/git-facts.js';
@@ -89,26 +90,13 @@ test('onResume returns undefined too', () => {
   assert.equal(onResume({ sessionId: 'card-1', entry: { cwd: '/w/app' }, reason: 'message', host: h.host }), undefined);
 });
 
-test('onPrompt adds same-prompt context at most three times and stops once noted', async () => {
+test('onBeforeDispatch retains cwd for an MCP tool call before the card is saved', () => {
+  onBeforeDispatch({ sessionId: 'card-early', cwd: '/w/app' });
+  assert.equal(promptCwdFor('card-early'), '/w/app');
   const h = harness();
   okFetch(h.calls);
-  for (let i = 0; i < 3; i++) {
-    const result = await onPrompt({ sessionId: 'card-1', cwd: '/w/app', entry: null, host: h.host });
-    assert.match(result.additionalContext, /update_session_note/);
-    assert.match(result.additionalContext, /card-1/);
-  }
-  assert.equal(await onPrompt({ sessionId: 'card-1', cwd: '/w/app', host: h.host }), undefined);
-  assert.equal(h.store.markIntentNoted('card-2'), true);
-  assert.equal(await onPrompt({ sessionId: 'card-2', cwd: '/w/app', host: h.host }), undefined);
-});
-
-test('onPrompt stays silent without a registry URL or git repo', async () => {
-  const unconfigured = harness({ registryUrl: null });
-  assert.equal(await onPrompt({ sessionId: 'card-1', cwd: '/w/app', host: unconfigured.host }), undefined);
-  const h = harness();
-  _setGitOriginForTests(async () => null);
-  assert.equal(await onPrompt({ sessionId: 'card-1', cwd: '/tmp/scratch', host: h.host }), undefined);
-  assert.equal(h.store.nextIntentReminder('card-1'), true, 'a no-repo prompt did not spend a reminder');
+  onDispatch({ sessionId: 'card-early', entry: { cwd: '/w/app' }, host: h.host });
+  assert.equal(promptCwdFor('card-early'), null);
 });
 
 test('a hook whose POST never settles still returns immediately', async () => {
@@ -161,39 +149,10 @@ test('onDispatch registers THEN notes, with the card intent, a one-line detail, 
   assert.doesNotMatch(h.calls[0].body.detail, /\n/);
 });
 
-test('the first prompt receives the registry brief as context, without a separate delivered turn', async () => {
-  const h = harness();
-  const delivered = [];
-  h.host.deliver = async (id, body) => { delivered.push({ id, body }); return { mode: 'live' }; };
-  globalThis.fetch = async (target, opts = {}) => {
-    h.calls.push({ url: String(target), body: JSON.parse(opts.body) });
-    return { ok: true, status: 200, json: async () => String(target).endsWith('/v1/brief')
-      ? { hookSpecificOutput: { additionalContext: '2 other sessions on acme/app\n    SendMessage to "peer-card"\n\nYou should set your intent with update_session_note now, before you edit, and\nPass messaging_handle from ListAgents.' } }
-      : { session: {} } };
-  };
-  const first = await onPrompt({ sessionId: 'card-1', cwd: '/w/app', entry: null, prompt: 'start work', host: h.host });
-  assert.match(first.additionalContext, /2 other sessions on acme\/app/);
-  assert.match(first.additionalContext, /untrusted/);
-  assert.match(first.additionalContext, /send_peer_message to "peer-card"/);
-  assert.doesNotMatch(first.additionalContext, /ListAgents|SendMessage to/);
-  assert.equal(h.calls[0].url, `${BASE}/v1/brief`);
-  assert.equal(h.calls[0].body.onlyIfUnbriefed, true);
-  assert.deepEqual(delivered, []);
-  assert.equal(onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app', intent: 'work' }, host: h.host }), undefined);
-  await new Promise((r) => setTimeout(r, 20));
-  assert.deepEqual(h.calls.map((c) => c.url), [
-    `${BASE}/v1/brief`, `${BASE}/v1/sessions`, `${BASE}/v1/sessions/card-1/note`,
-  ]);
-  await onPrompt({ sessionId: 'card-1', cwd: '/w/app', host: h.host });
-  onResume({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(h.calls.filter((c) => c.url.endsWith('/v1/brief')).length, 1);
-});
-
 test('an agent note written on the first prompt is not overwritten by dispatch', async () => {
   const h = harness();
   okFetch(h.calls);
-  await onPrompt({ sessionId: 'card-1', cwd: '/w/app', entry: null, host: h.host });
+  onBeforeDispatch({ sessionId: 'card-1', cwd: '/w/app' });
   h.store.markIntentNoted('card-1');
   onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app', intent: 'stale launch intent' }, host: h.host });
   await new Promise((r) => setTimeout(r, 20));
@@ -238,12 +197,12 @@ test('a register failure still attempts the note, and logs one line', async () =
   assert.match(h.logs[0], /could not register/);
 });
 
-test('no registry URL publishes nothing and says nothing — dispatch is far too frequent for a line', async () => {
+test('no configured URL uses the marketplace plugin default', async () => {
   const h = harness({ registryUrl: null });
   okFetch(h.calls);
   onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
   await new Promise((r) => setTimeout(r, 20));
-  assert.deepEqual(h.calls, []);
+  assert.equal(h.calls.length, 2);
   assert.deepEqual(h.logs, []);
 });
 

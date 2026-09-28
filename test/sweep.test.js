@@ -70,14 +70,12 @@ afterEach(() => { globalThis.fetch = realFetch; _resetSweepState(); setPerHandle
 
 // ── Inert ────────────────────────────────────────────────────────────────────
 
-test('no registry URL is WHOLLY inert, with one line per process and never per tick', async () => {
+test('no configured URL uses the plugin default', async () => {
   const h = harness({ registryUrl: null });
-  h.stub(() => { throw new Error('should not reach the network'); });
+  h.stub(() => ({ json: {} }));
   for (let i = 0; i < 5; i++) await postmaster({ host: h.host, now: i * SWEEP_MS, repoKey: h.repoKey });
-  assert.deepEqual(h.calls, []);
-  assert.equal(h.logs.length, 1, 'one line, not one per tick');
-  assert.match(h.logs[0], /no registry URL set/);
-  assert.equal(h.rebuilds(), 0);
+  assert.ok(h.calls.length > 0);
+  assert.equal(h.logs.length, 0);
 });
 
 // The DIRECTORY is cross-repo, so it is the one thing a board with no

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from '../lib/tools.js';
 import { PeerMessageStore, MAX_BODY_CHARS } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
-import { onPrompt } from '../lib/hooks.js';
+import { onBeforeDispatch } from '../lib/hooks.js';
 import { clearPromptCwd } from '../lib/prompt-context.js';
 import { _resetGitNameCache, _setGitNameForTests } from '../lib/git-identity.js';
 
@@ -113,12 +113,13 @@ test('an unknown or absent caller is refused rather than sent unattributed', asy
   assert.equal(h.calls.length, 0);
 });
 
-test('no registry URL is a plain error naming where a human sets one', async () => {
-  const h = harness({ registryUrl: null }); // null, not undefined: undefined hits the default parameter
+test('no configured registry URL uses the plugin default', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness({ registryUrl: null });
   h.stub(() => ({ json: {} }));
   const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x', text: 'y' });
-  assert.equal(res.isError, true);
-  assert.match(text(res), /Extensions tab/);
+  assert.equal(res.isError, undefined);
+  assert.match(h.calls[0].url, /^https:\/\/session-registry\.platform-dev\.portswigger\.io\//);
 });
 
 test('missing arguments and messaging yourself are refused before the network', async () => {
@@ -216,7 +217,7 @@ test('update_session_note writes only agent-supplied fields to this card', async
   assert.equal(h.calls[0].url, `${BASE}/v1/sessions/card-1/note`);
   assert.deepEqual(h.calls[0].body, { repo: 'acme/app', intent: 'make registry tools', detail: 'lib/tools.js' });
   assert.match(text(res), /make registry tools/);
-  assert.equal(h.store.nextIntentReminder('card-1'), false, 'a successful note stops future reminders');
+  assert.equal(h.store.isIntentNoted('card-1'), true);
 });
 
 test('a failed registry note leaves the prompt reminder armed', async () => {
@@ -224,18 +225,17 @@ test('a failed registry note leaves the prompt reminder armed', async () => {
   const h = harness();
   h.stub(() => ({ status: 503, json: { error: 'down' } }));
   assert.equal((await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' }, { intent: 'work' })).isError, true);
-  assert.equal(h.store.nextIntentReminder('card-1'), true);
+  assert.equal(h.store.isIntentNoted('card-1'), false);
 });
 
 test('a first-turn note resolves its repo before dispatch saves the card', async () => {
   fakeGit('git@github.com:acme/app.git');
   const h = harness({ sessions: {} });
   h.stub(() => ({ json: { session: { intent: 'first turn' } } }));
-  const reminder = await onPrompt({ sessionId: 'card-early', cwd: '/w/app', entry: null, prompt: 'start work', host: h.host });
-  assert.match(reminder.additionalContext, /update_session_note/);
+  onBeforeDispatch({ sessionId: 'card-early', cwd: '/w/app' });
   const res = await updateSessionNoteTool.handler({ host: h.host, caller: 'card-early' }, { intent: 'first turn' });
   assert.equal(res.isError, undefined);
-  assert.deepEqual(h.calls[1].body, { repo: 'acme/app', intent: 'first turn' });
+  assert.deepEqual(h.calls[0].body, { repo: 'acme/app', intent: 'first turn' });
   clearPromptCwd('card-early');
 });
 

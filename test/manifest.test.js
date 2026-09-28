@@ -46,7 +46,7 @@ const CAPABILITIES = new Set([
   'schedules:read', 'schedules:write',
   'mail:read', 'mail:send',
 ]);
-const SESSION_HOOKS = new Set(['onBeforeDispatch', 'onArchive', 'onFork', 'onPurge', 'onDispatch', 'onResume', 'onPrompt']);
+const SESSION_HOOKS = new Set(['onBeforeDispatch', 'onArchive', 'onFork', 'onPurge', 'onDispatch', 'onResume']);
 const SETTING_TYPES = new Set(['text', 'number', 'toggle']);
 const ID_RE = /^[a-z][a-z0-9-]*$/;
 const SETTING_KEY_RE = /^[a-z][a-zA-Z0-9]*$/;
@@ -89,7 +89,7 @@ test('sessions:wake is deliberately absent — host.deliver already wakes a targ
   assert.equal(manifest.requires.includes('sessions:wake'), false);
 });
 
-test('the declared host API range covers native onPrompt context injection', () => {
+test('the declared host API range covers declarative native hooks', () => {
   assert.equal(manifest.engines.wranglerApi, '^1.11.0');
   assert.ok(fs.readFileSync(path.join(ROOT, 'public/client.js'), 'utf8').includes('onMessage'));
 });
@@ -115,8 +115,8 @@ test('every setting def has a valid key, type and label, with no duplicates', ()
       if (s[k] != null) assert.equal(typeof s[k], 'string', `${s.key}.${k}`);
     }
     // There is no `default` on a def, deliberately: an unset setting must read
-    // as undefined, which is what the "no registry URL means wholly inert"
-    // behaviour depends on. And no `secret` type exists to ask for.
+    // as undefined; registryUrlFor supplies the plugin default. No `secret`
+    // type exists to ask for.
     assert.equal('default' in s, false, `${s.key} must not declare a default`);
   }
   assert.deepEqual([...keys], ['registryUrl', 'pollSeconds']);
@@ -146,7 +146,9 @@ test('registry tools and launch reminder are contributed together', () => {
   assert.deepEqual(manifest.skills, ['session-registry']);
   const skillDir = path.join(dir, 'skills', 'session-registry');
   assert.match(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /^---\nname: session-registry\n/);
-  assert.equal(fs.existsSync(path.join(skillDir, 'WRANGLER.md')), false, 'the reminder comes from onPrompt');
+  const native = JSON.parse(fs.readFileSync(path.join(skillDir, 'hooks', 'hooks.json'), 'utf8'));
+  assert.deepEqual(Object.keys(native.hooks).sort(), manifest.hooks.slice().sort());
+  assert.deepEqual(manifest.hooks, pkg.wranglerExtension.hooks);
 });
 
 test('every session hook is a known name and a function', () => {

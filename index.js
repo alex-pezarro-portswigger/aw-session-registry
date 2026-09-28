@@ -3,7 +3,7 @@ import path from 'node:path';
 import { PeerMessageStore } from './lib/store.js';
 import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from './lib/tools.js';
 import { HANDLERS } from './lib/handlers.js';
-import { onArchive, onDispatch, onPrompt, onPurge, onResume } from './lib/hooks.js';
+import { onArchive, onBeforeDispatch, onDispatch, onPurge, onResume } from './lib/hooks.js';
 import { POSTMASTER_SWEEP, SWEEP_MS } from './lib/sweep.js';
 import { peerMessagingGraph } from './lib/graph.js';
 
@@ -47,9 +47,7 @@ export default {
   // which is the honest end state rather than a surprise.
   defaultEnabled: false,
 
-  // Native UserPromptSubmit context injection arrived with session.onPrompt in
-  // 1.11.0. An older Wrangler would reject the hook or silently omit the
-  // first-three-prompt reminder, so this is a hard minimum.
+  // Native extension skill hooks arrived in 1.11.0.
   engines: { wranglerApi: '^1.11.0' },
 
   // Four capabilities, and the list is DISCLOSURE, not a sandbox: this
@@ -84,8 +82,7 @@ export default {
       type: 'text',
       label: 'Session registry URL',
       placeholder: 'https://session-registry.example.internal',
-      help: 'Where to relay messages through. With this unset the extension is completely inert: '
-        + 'it publishes nothing, fetches nothing and delivers nothing. The registry has no '
+      help: 'Override the session registry URL used by the marketplace plugin. The registry has no '
         + 'authentication of its own, so anything that can reach it can read what is published there.',
     },
     {
@@ -103,8 +100,9 @@ export default {
 
   tools: [sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool],
   skills: ['session-registry'],
+  hooks: ['PostToolUse', 'UserPromptSubmit'],
   handlers: HANDLERS,
-  session: { onDispatch, onResume, onPrompt, onArchive, onPurge },
+  session: { onBeforeDispatch, onDispatch, onResume, onArchive, onPurge },
   sweeps: [POSTMASTER_SWEEP],
   graph: peerMessagingGraph,
   client: 'public/client.js',
