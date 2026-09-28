@@ -1,7 +1,7 @@
-# aw-peer-messaging
+# aw-session-registry
 
-An Agent Wrangler extension: 1-to-1 messages between sessions working in the
-same repo, relayed by the [session registry](https://github.com/portswigger-apps/cod-session-registry).
+An Agent Wrangler extension to bring the [session registry](https://github.com/portswigger-apps/cod-session-registry).
+into Agent Wrangler.
 
 **Every inbound message waits on its card for you to approve it before the agent
 sees it**, unless you have explicitly allowed that one peer for that one card.
@@ -306,54 +306,3 @@ mechanism.
    `fetch`, no `fs`, no `git`, and deliberately not `host.sessions.list()`.
 
 ---
-
-## Findings against the extensions API
-
-This is the first real manifest written against the Agent Wrangler extensions
-API, so these are recorded rather than quietly worked around.
-
-- **The import scan covers an extension's own test files.**
-  `importViolation` walks every `.js` under the installed tree except
-  `node_modules` and dot-directories, and an install is a `git clone` — so
-  `test/` is on disk and is scanned. One of its patterns is
-  `from '../index.js'`, which is exactly what a manifest self-check test
-  naturally writes, so the most obvious test in the repo would quarantine the
-  extension. `test/manifest.test.js` therefore uses a dynamic import, which the
-  scan does not match. The fix belongs in `ownJsFiles`.
-- **`board:broadcast` reached nowhere before host API 1.2.0.** The façade put an
-  `{type:'ext:<id>', …}` frame on the control socket, but `app.js`'s ws ladder
-  had no `ext:` branch and the client api had no inbound seam, so the frame was
-  silently dropped. Landed as the `onMessage` seam, which is why this manifest
-  declares `^1.2.0`.
-- **A store factory gets `{id, log}` and nothing else**, where `id` is the
-  **store name**, not the extension id. That is the API's rule rather than an
-  oversight (factories run before `rebuild`/`broadcast`/`deliver` exist), but it
-  means a store must resolve its own data dir and cannot be configured by a
-  setting — hence the fixed state-file path above.
-- **JavaScript's `new URL` is not a drop-in for Go's `url.Parse`** when
-  reimplementing the registry's repo-key normalisation: it applies RFC 3986 path
-  normalisation, so `https://host/../../etc/passwd` has a `pathname` of
-  `/etc/passwd` and the traversal check can never fire. `lib/repo-key.js`
-  extracts the path by hand for that reason, and the shared case table in
-  `test/repo-key.test.js` is what caught it. Not an AW finding, but the same
-  class of problem: a key mismatch between the two halves fails *silently* —
-  the drain simply finds nothing, for ever.
-
----
-
-## Development
-
-```bash
-npm ci
-npm test
-```
-
-The suite is `node:test`, no runner and no build. The network is a stubbed
-`globalThis.fetch`, the DOM is a hand-rolled stub in the style of the board's
-own `public/` tests, and `git` is injected at a module seam.
-
-While the registry's **batched** drain/ack is still in flight, set
-`AW_PEER_MESSAGING_PER_HANDLE=1` to use the per-handle endpoints instead. That
-is one request per live session per sweep — the cost the batched form exists to
-remove — so it is a bridge, not a mode. The flag and every branch behind it come
-out when the batched endpoints ship.
