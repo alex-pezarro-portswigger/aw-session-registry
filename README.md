@@ -92,7 +92,7 @@ It arrives **switched off**: it reaches a network host, so it has to be chosen
 rather than inherited. Turn it on in the Extensions tab. It uses the same
 registry URL as the marketplace plugin by default.
 
-Requires a wrangler serving host API **`^1.11.0`** for declared native hooks.
+Requires a wrangler serving host API **`^1.12.0`** for declared native hooks.
 The extension discloses `UserPromptSubmit` and `PostToolUse` during install.
 An older wrangler refuses to load it.
 Codex may ask the user to trust Wrangler's generated prompt hook command;

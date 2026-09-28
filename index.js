@@ -47,8 +47,8 @@ export default {
   // which is the honest end state rather than a surprise.
   defaultEnabled: false,
 
-  // Native extension skill hooks arrived in 1.11.0.
-  engines: { wranglerApi: '^1.11.0' },
+  // Native extension skill hooks arrived in 1.12.0.
+  engines: { wranglerApi: '^1.12.0' },
 
   // Four capabilities, and the list is DISCLOSURE, not a sandbox: this
   // extension runs in-process with full access to the machine, and nothing

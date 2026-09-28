@@ -90,7 +90,7 @@ test('sessions:wake is deliberately absent — host.deliver already wakes a targ
 });
 
 test('the declared host API range covers declarative native hooks', () => {
-  assert.equal(manifest.engines.wranglerApi, '^1.11.0');
+  assert.equal(manifest.engines.wranglerApi, '^1.12.0');
   assert.ok(fs.readFileSync(path.join(ROOT, 'public/client.js'), 'utf8').includes('onMessage'));
 });
 

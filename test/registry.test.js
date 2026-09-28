@@ -1,7 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  postNote, postBrief, postRegister, postCloseOut, listSessions, listAllSessions, send, drain, ack,
+  postNote, postRegister, postCloseOut, listSessions, listAllSessions, send, drain, ack,
   setPerHandleFallback, usingPerHandleFallback,
   MAX_HANDLES_PER_DRAIN, MAX_IDS_PER_ACK,
 } from '../lib/registry.js';
@@ -50,15 +50,6 @@ test('postNote lets the agent update intent and detail without clearing the hand
   assert.deepEqual(calls[0].body, { repo: 'acme/app', intent: 'new goal', detail: 'lib/tools.js' });
   await postNote(BASE, 'card-1', { repo: 'acme/app', detail: '' });
   assert.deepEqual(calls[1].body, { repo: 'acme/app', detail: '' });
-});
-
-test('postBrief asks the registry for its one-shot startup context', async () => {
-  stub(() => ({ json: { hookSpecificOutput: { additionalContext: 'peer brief' } } }));
-  const res = await postBrief(BASE, 'card-1', { repo: 'acme/app', origin: 'local', branch: 'feature', ownerName: 'Sam', ownerEmail: 'sam@example.com' });
-  assert.deepEqual(res, { ok: true, context: 'peer brief' });
-  assert.equal(calls[0].url, `${BASE}/v1/brief`);
-  assert.deepEqual(calls[0].body, { sessionId: 'card-1', repo: 'acme/app', origin: 'local', onlyIfUnbriefed: true,
-    branch: 'feature', ownerName: 'Sam', ownerEmail: 'sam@example.com' });
 });
 
 // THE REGRESSION THIS GUARDS: `origin` is what switches the note endpoint's
