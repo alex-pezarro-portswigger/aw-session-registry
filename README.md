@@ -39,8 +39,8 @@ one.
   so peers in the same repo can address it.
 - Gives an agent four MCP tools: `list_peer_sessions`, `send_peer_message`,
   `list_repo_sessions` and `update_session_note`.
-- Delivers the registry's peer brief when a card starts. A launch instruction
-  reminds the agent to check peers and update its note before editing.
+- Adds the registry's peer brief to the first prompt. The first three prompts
+  carry a same-prompt reminder until the agent updates its note.
 - Drains inbound messages on a 15-second sweep, stores them, and **acks the
   relay only after they are on disk**.
 - Puts every unapproved message behind a click on the card: **Allow once ·
@@ -92,10 +92,9 @@ It arrives **switched off**: it reaches a network host, so it has to be chosen
 rather than inherited. Turn it on and set the registry URL from the cog on its
 row.
 
-Requires a wrangler serving host API **`^1.2.0`** — 1.1.0 for `host.settings`,
-1.2.0 for the client-side `onMessage` seam the panel uses for its live
-confirmations. An older wrangler refuses to load it rather than dropping those
-frames silently.
+Requires a wrangler serving host API **`^1.11.0`** for native
+`UserPromptSubmit` context injection. An older wrangler refuses to load the
+extension rather than silently omitting the reminder.
 
 ### Settings
 
@@ -135,8 +134,8 @@ extension owns that row from start to end:
 
 - **Dispatch** registers it (origin, branch, git owner, the card's intent, and a
   one-line detail naming it as an Agent Wrangler card), then notes the card id
-  on as its messaging handle. It also asks the registry for its one-shot peer
-  brief and delivers that to the agent.
+  on as its messaging handle. The first prompt also asks the registry for its
+  one-shot peer brief before the model request.
 - **Resume** re-registers with no intent or detail, so whatever the agent wrote
   survives, while the branch is refreshed and a closed-out row is reopened.
 - **Archive** closes the row out and clears the handle.
@@ -156,15 +155,17 @@ for compatibility with the standalone plugin and are checked against the card.
 The messaging handle is always the card id, because that is what this board can
 deliver to.
 
-The plugin uses `UserPromptSubmit` to repeat its intent reminder on up to three
-prompts. Wrangler's extension API has no per-prompt hook. Instead, this
-extension ships an always-on launch instruction. Wrangler already has the
-user's request at launch, so the instruction can ask for a concrete note then.
+Like the plugin, the extension uses native `UserPromptSubmit` to attach the
+reminder to the prompt being submitted, up to three times. A successful
+`update_session_note` call switches it off. The count and noted marker persist
+across Wrangler restarts and resumes. Prompts in a folder without a git origin,
+or while the registry URL is unset, do not spend a reminder.
 
-The brief is delivered through Wrangler's message delivery API after the card
-starts, so it may appear as a separate turn after the initial request. If the
-standalone plugin is also installed, its own `SessionStart` hook can show the
-same brief too; the plugin's hook does not use the registry's one-shot gate.
+The brief is attached to the first prompt through Wrangler's native
+`UserPromptSubmit` hook. That also registers the card early enough for a
+first-turn `update_session_note` call. If the standalone plugin is installed,
+its `SessionStart` hook can show the same brief too; that hook does not use the
+registry's one-shot gate.
 
 ### Two registry rows for one piece of work
 
@@ -262,9 +263,10 @@ mechanism.
 | `lib/registry.js` | The HTTP client. Every function returns `{ok, …}` and never throws. |
 | `lib/repo-key.js` | `<owner>/<repo>`, reimplementing the registry's own Go normalisation. |
 | `lib/framing.js` | The `[peer message · untrusted · …]` frame and its marker escaping. |
-| `lib/hooks.js` | Card registration, start brief delivery, handle publication and archive/purge cleanup. |
+| `lib/hooks.js` | Card registration, first-prompt brief and reminder, handle publication and archive/purge cleanup. |
+| `lib/prompt-context.js` | Short-lived cwd for tool calls before dispatch saves the card. |
 | `lib/tools.js` | Peer messaging and registry MCP tools. |
-| `skills/session-registry/` | Always-on launch reminder and on-demand skill. |
+| `skills/session-registry/` | On-demand skill for note and peer checks. |
 | `lib/handlers.js` | The six control handlers behind the buttons. |
 | `lib/graph.js` | The `graph.peerMessaging` contributor. |
 | `lib/directory.js` | The last directory fetch, held for the graph. Pure module state; the sweep writes it, the graph reads it. |

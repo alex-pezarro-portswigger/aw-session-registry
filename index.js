@@ -3,7 +3,7 @@ import path from 'node:path';
 import { PeerMessageStore } from './lib/store.js';
 import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from './lib/tools.js';
 import { HANDLERS } from './lib/handlers.js';
-import { onArchive, onDispatch, onPurge, onResume } from './lib/hooks.js';
+import { onArchive, onDispatch, onPrompt, onPurge, onResume } from './lib/hooks.js';
 import { POSTMASTER_SWEEP, SWEEP_MS } from './lib/sweep.js';
 import { peerMessagingGraph } from './lib/graph.js';
 
@@ -47,12 +47,10 @@ export default {
   // which is the honest end state rather than a surprise.
   defaultEnabled: false,
 
-  // `^1.2.0` and not `^1.1.0`: 1.1.0 is where `host.settings` arrived (this
-  // manifest needs it), but 1.2.0 is where the client-side `onMessage` seam
-  // did, and public/client.js calls it. There is no server-side key for that
-  // seam, so this range is the ONLY thing that stops this extension booting
-  // against a wrangler whose app.js would silently drop its frames.
-  engines: { wranglerApi: '^1.2.0' },
+  // Native UserPromptSubmit context injection arrived with session.onPrompt in
+  // 1.11.0. An older Wrangler would reject the hook or silently omit the
+  // first-three-prompt reminder, so this is a hard minimum.
+  engines: { wranglerApi: '^1.11.0' },
 
   // Four capabilities, and the list is DISCLOSURE, not a sandbox: this
   // extension runs in-process with full access to the machine, and nothing
@@ -106,7 +104,7 @@ export default {
   tools: [sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool],
   skills: ['session-registry'],
   handlers: HANDLERS,
-  session: { onDispatch, onResume, onArchive, onPurge },
+  session: { onDispatch, onResume, onPrompt, onArchive, onPurge },
   sweeps: [POSTMASTER_SWEEP],
   graph: peerMessagingGraph,
   client: 'public/client.js',

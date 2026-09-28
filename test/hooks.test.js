@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { onDispatch, onResume, onArchive, onPurge } from '../lib/hooks.js';
+import { onDispatch, onResume, onPrompt, onArchive, onPurge } from '../lib/hooks.js';
 import { PeerMessageStore } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
 import { _setGitBranchForTests, _setGitIdentityForTests } from '../lib/git-facts.js';
@@ -89,6 +89,28 @@ test('onResume returns undefined too', () => {
   assert.equal(onResume({ sessionId: 'card-1', entry: { cwd: '/w/app' }, reason: 'message', host: h.host }), undefined);
 });
 
+test('onPrompt adds same-prompt context at most three times and stops once noted', async () => {
+  const h = harness();
+  okFetch(h.calls);
+  for (let i = 0; i < 3; i++) {
+    const result = await onPrompt({ sessionId: 'card-1', cwd: '/w/app', entry: null, host: h.host });
+    assert.match(result.additionalContext, /update_session_note/);
+    assert.match(result.additionalContext, /card-1/);
+  }
+  assert.equal(await onPrompt({ sessionId: 'card-1', cwd: '/w/app', host: h.host }), undefined);
+  assert.equal(h.store.markIntentNoted('card-2'), true);
+  assert.equal(await onPrompt({ sessionId: 'card-2', cwd: '/w/app', host: h.host }), undefined);
+});
+
+test('onPrompt stays silent without a registry URL or git repo', async () => {
+  const unconfigured = harness({ registryUrl: null });
+  assert.equal(await onPrompt({ sessionId: 'card-1', cwd: '/w/app', host: unconfigured.host }), undefined);
+  const h = harness();
+  _setGitOriginForTests(async () => null);
+  assert.equal(await onPrompt({ sessionId: 'card-1', cwd: '/tmp/scratch', host: h.host }), undefined);
+  assert.equal(h.store.nextIntentReminder('card-1'), true, 'a no-repo prompt did not spend a reminder');
+});
+
 test('a hook whose POST never settles still returns immediately', async () => {
   const h = harness();
   hangingFetch(h.calls);
@@ -139,7 +161,7 @@ test('onDispatch registers THEN notes, with the card intent, a one-line detail, 
   assert.doesNotMatch(h.calls[0].body.detail, /\n/);
 });
 
-test('dispatch delivers the registry brief once, after registering the card', async () => {
+test('the first prompt receives the registry brief as context, without a separate delivered turn', async () => {
   const h = harness();
   const delivered = [];
   h.host.deliver = async (id, body) => { delivered.push({ id, body }); return { mode: 'live' }; };
@@ -149,18 +171,33 @@ test('dispatch delivers the registry brief once, after registering the card', as
       ? { hookSpecificOutput: { additionalContext: '2 other sessions on acme/app' } }
       : { session: {} } };
   };
+  const first = await onPrompt({ sessionId: 'card-1', cwd: '/w/app', entry: null, prompt: 'start work', host: h.host });
+  assert.match(first.additionalContext, /2 other sessions on acme\/app/);
+  assert.match(first.additionalContext, /untrusted/);
+  assert.equal(h.calls[0].url, `${BASE}/v1/brief`);
+  assert.equal(h.calls[0].body.onlyIfUnbriefed, true);
+  assert.deepEqual(delivered, []);
   assert.equal(onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app', intent: 'work' }, host: h.host }), undefined);
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(h.calls.map((c) => c.url), [
-    `${BASE}/v1/sessions`, `${BASE}/v1/sessions/card-1/note`, `${BASE}/v1/brief`,
+    `${BASE}/v1/brief`, `${BASE}/v1/sessions`, `${BASE}/v1/sessions/card-1/note`,
   ]);
-  assert.equal(h.calls[2].body.onlyIfUnbriefed, true);
-  assert.deepEqual(delivered.map((d) => d.id), ['card-1']);
-  assert.match(delivered[0].body, /2 other sessions on acme\/app/);
-  assert.match(delivered[0].body, /untrusted/);
+  await onPrompt({ sessionId: 'card-1', cwd: '/w/app', host: h.host });
   onResume({ sessionId: 'card-1', entry: { cwd: '/w/app' }, host: h.host });
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(h.calls.filter((c) => c.url.endsWith('/v1/brief')).length, 1);
+});
+
+test('an agent note written on the first prompt is not overwritten by dispatch', async () => {
+  const h = harness();
+  okFetch(h.calls);
+  await onPrompt({ sessionId: 'card-1', cwd: '/w/app', entry: null, host: h.host });
+  h.store.markIntentNoted('card-1');
+  onDispatch({ sessionId: 'card-1', entry: { cwd: '/w/app', intent: 'stale launch intent' }, host: h.host });
+  await new Promise((r) => setTimeout(r, 20));
+  const registration = h.calls.find((c) => c.url === `${BASE}/v1/sessions`);
+  assert.equal('intent' in registration.body, false);
+  assert.equal('detail' in registration.body, false);
 });
 
 test('onResume registers then notes with intent and detail ABSENT, so the agent text survives', async () => {

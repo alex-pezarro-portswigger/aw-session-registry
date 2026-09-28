@@ -257,6 +257,21 @@ test('the peer"s asserted display name is remembered on the channel', () => {
 
 // ── Session lifecycle ────────────────────────────────────────────────────────
 
+test('intent reminders cap at three, persist, stop on note and clear on purge', () => {
+  const file = tmpFile();
+  const s = store(file);
+  assert.deepEqual([s.nextIntentReminder('card-1'), s.nextIntentReminder('card-1')], [true, true]);
+  assert.equal(s.markBriefed('card-1'), true);
+  const reloaded = store(file);
+  assert.equal(reloaded.hasBriefed('card-1'), true);
+  assert.equal(reloaded.nextIntentReminder('card-1'), true);
+  assert.equal(reloaded.nextIntentReminder('card-1'), false);
+  assert.equal(reloaded.markIntentNoted('card-1'), true);
+  assert.equal(store(file).nextIntentReminder('card-1'), false);
+  assert.equal(reloaded.forgetSession('card-1'), true);
+  assert.equal(store(file).nextIntentReminder('card-1'), true);
+});
+
 test('archive drops pending and every standing approval, keeps threads and seen', () => {
   const s = store();
   s.receive('card-1', envelope({ id: 'a' }));

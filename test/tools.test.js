@@ -6,6 +6,8 @@ import path from 'node:path';
 import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from '../lib/tools.js';
 import { PeerMessageStore, MAX_BODY_CHARS } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
+import { onPrompt } from '../lib/hooks.js';
+import { clearPromptCwd } from '../lib/prompt-context.js';
 import { _resetGitNameCache, _setGitNameForTests } from '../lib/git-identity.js';
 
 const BASE = 'https://registry.example.test';
@@ -214,6 +216,27 @@ test('update_session_note writes only agent-supplied fields to this card', async
   assert.equal(h.calls[0].url, `${BASE}/v1/sessions/card-1/note`);
   assert.deepEqual(h.calls[0].body, { repo: 'acme/app', intent: 'make registry tools', detail: 'lib/tools.js' });
   assert.match(text(res), /make registry tools/);
+  assert.equal(h.store.nextIntentReminder('card-1'), false, 'a successful note stops future reminders');
+});
+
+test('a failed registry note leaves the prompt reminder armed', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness();
+  h.stub(() => ({ status: 503, json: { error: 'down' } }));
+  assert.equal((await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' }, { intent: 'work' })).isError, true);
+  assert.equal(h.store.nextIntentReminder('card-1'), true);
+});
+
+test('a first-turn note resolves its repo before dispatch saves the card', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness({ sessions: {} });
+  h.stub(() => ({ json: { session: { intent: 'first turn' } } }));
+  const reminder = await onPrompt({ sessionId: 'card-early', cwd: '/w/app', entry: null, prompt: 'start work', host: h.host });
+  assert.match(reminder.additionalContext, /update_session_note/);
+  const res = await updateSessionNoteTool.handler({ host: h.host, caller: 'card-early' }, { intent: 'first turn' });
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(h.calls[1].body, { repo: 'acme/app', intent: 'first turn' });
+  clearPromptCwd('card-early');
 });
 
 test('registry note tool refuses a stale repo or session id before writing', async () => {
@@ -221,7 +244,7 @@ test('registry note tool refuses a stale repo or session id before writing', asy
   const h = harness();
   h.stub(() => ({ json: {} }));
   for (const args of [{ repo: 'wrong/repo', intent: 'x' }, { session_id: 'other', intent: 'x' },
-    { messaging_handle: 'other', intent: 'x' }]) {
+    { messaging_handle: 'other', intent: 'x' }, { messaging_handle: 'card-1' }]) {
     assert.equal((await updateSessionNoteTool.handler({ host: h.host, caller: 'card-1' }, args)).isError, true);
   }
   assert.equal(h.calls.length, 0);

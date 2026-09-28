@@ -46,7 +46,7 @@ const CAPABILITIES = new Set([
   'schedules:read', 'schedules:write',
   'mail:read', 'mail:send',
 ]);
-const SESSION_HOOKS = new Set(['onBeforeDispatch', 'onArchive', 'onFork', 'onPurge', 'onDispatch', 'onResume']);
+const SESSION_HOOKS = new Set(['onBeforeDispatch', 'onArchive', 'onFork', 'onPurge', 'onDispatch', 'onResume', 'onPrompt']);
 const SETTING_TYPES = new Set(['text', 'number', 'toggle']);
 const ID_RE = /^[a-z][a-z0-9-]*$/;
 const SETTING_KEY_RE = /^[a-z][a-zA-Z0-9]*$/;
@@ -89,8 +89,8 @@ test('sessions:wake is deliberately absent — host.deliver already wakes a targ
   assert.equal(manifest.requires.includes('sessions:wake'), false);
 });
 
-test('the declared host API range covers the onMessage seam the client half uses', () => {
-  assert.equal(manifest.engines.wranglerApi, '^1.2.0');
+test('the declared host API range covers native onPrompt context injection', () => {
+  assert.equal(manifest.engines.wranglerApi, '^1.11.0');
   assert.ok(fs.readFileSync(path.join(ROOT, 'public/client.js'), 'utf8').includes('onMessage'));
 });
 
@@ -146,7 +146,7 @@ test('registry tools and launch reminder are contributed together', () => {
   assert.deepEqual(manifest.skills, ['session-registry']);
   const skillDir = path.join(dir, 'skills', 'session-registry');
   assert.match(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /^---\nname: session-registry\n/);
-  assert.match(fs.readFileSync(path.join(skillDir, 'WRANGLER.md'), 'utf8'), /update_session_note/);
+  assert.equal(fs.existsSync(path.join(skillDir, 'WRANGLER.md')), false, 'the reminder comes from onPrompt');
 });
 
 test('every session hook is a known name and a function', () => {
