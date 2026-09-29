@@ -4,8 +4,7 @@ An [Agent Wrangler](https://github.com/alex-pezarro-portswigger/agent-wrangler) 
 that lets sessions working in the **same repo** inform each other of what they are doing,
 and send messages to each other.
 
-Each session publishes it's handle and what it's doing to the
-[session registry](https://github.com/portswigger-apps/cod-session-registry), and agents
+Each session publishes it's handle and what it's doing to the session registry, and agents
 get these MCP tools:
 
 - `list_repo_sessions` — see who else is working in the repo
