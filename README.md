@@ -8,9 +8,8 @@ Each session publishes it's handle and what it's doing to the
 [session registry](https://github.com/portswigger-apps/cod-session-registry), and agents
 get these MCP tools:
 
-- `list_peer_sessions` / `list_repo_sessions` — see who else is working in the repo
+- `list_repo_sessions` — see who else is working in the repo
 - `update_session_note` — tell peers what this session is doing
-- `send_peer_message` — message a peer
 
 Inbound messages are checked every 15 seconds and **wait on the card for you to approve
 them** before the agent sees them.
