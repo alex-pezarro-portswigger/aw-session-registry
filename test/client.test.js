@@ -241,7 +241,34 @@ test('nothing in the panel binds a key event — approving is a CLICK only', () 
     for (const k of Object.keys(n.listeners || {})) bound.add(k);
     for (const c of n.children || []) walk(c);
   }(host));
-  assert.deepEqual([...bound], ['click']);
+  // `toggle` is the collapsed peer list remembering it was opened — not a key.
+  assert.deepEqual([...bound].sort(), ['click', 'toggle']);
+});
+
+test('waiting messages draw in their own strip, the one ordered below the terminal', () => {
+  const h = harness(mod);
+  const host = h.mountPanel();
+  h.contributions.get('panel.section').update(host, { sessionId: 'card-1' }, graphWith({
+    inbox: { 'card-1': { messages: [message()], channels: [{ peerHandle: 'p', allowAll: true, inCount: 1 }] } },
+  }));
+  assert.equal(all(host.querySelector('.peer-pending'), 'peer-msg').length, 1);
+  assert.equal(all(host.querySelector('.peer-top'), 'peer-msg').length, 0);
+  assert.equal(all(host.querySelector('.peer-top'), 'peer-channel').length, 1);
+});
+
+test('a peer this card has only sent to is not listed, and no out count is shown', () => {
+  const h = harness(mod);
+  const host = h.mountPanel();
+  h.contributions.get('panel.section').update(host, { sessionId: 'card-1' }, graphWith({
+    inbox: { 'card-1': { messages: [], channels: [
+      { peerHandle: 'sent-only', outCount: 3 },
+      { peerHandle: 'heard', inCount: 2, outCount: 1 },
+    ] } },
+  }));
+  const rows = all(host, 'peer-channel');
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].textContent.includes('heard'));
+  assert.equal(rows[0].textContent.includes('out'), false);
 });
 
 // ── The frames it sends ──────────────────────────────────────────────────────
