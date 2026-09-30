@@ -23,7 +23,7 @@ export const dir = path.dirname(fileURLToPath(import.meta.url));
 
 export default {
   id: 'peer-messaging',
-  label: 'Peer messaging',
+  label: 'Session registry',
 
   // `help` says what the feature IS and what survives a toggle, and says
   // NOTHING about when a change takes effect. `extensionFlipNote`
@@ -36,10 +36,9 @@ export default {
     + 'approvals, the messages still waiting and the log of what was delivered are kept in this '
     + 'extension\'s own file and survive being switched off.',
 
-  description: '1-to-1 messages between Agent Wrangler sessions in the same repo, relayed by the '
-    + 'session registry. Every inbound message waits for you to approve it before the agent sees it.',
+  description: 'Lets Agent Wrangler sessions working in the same repo inform each other of what they are doing, and send each other messages.',
   author: 'Alex Pezarro <alex.pezarro@portswigger.net>',
-  homepage: 'https://github.com/portswigger-apps/aw-peer-messaging',
+  homepage: 'https://github.com/alex-pezarro-portswigger/aw-session-registry',
 
   // OFF until someone opts in. An extension that reaches a network host the
   // moment it is installed must be chosen, not inherited — and it also means an
