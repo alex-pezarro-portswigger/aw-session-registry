@@ -9,8 +9,11 @@ get these MCP tools:
 
 - `list_repo_sessions` — see who else is working in the repo
 - `update_session_note` — tell peers what this session is doing
+- `list_remote_peer_sessions` / `send_remote_peer_message` — message sessions on **other
+  boards**. Sessions on your own board use Agent Wrangler's built-in `send_message`, and the
+  remote tools refuse them.
 
-Inbound messages are checked every 15 seconds and **wait on the card for you to approve
+Inbound remote messages are checked every 15 seconds and **wait on the card for you to approve
 them** before the agent sees them.
 
 A bundled hook gives the agent a brief of what its peers are doing on its first prompt, and

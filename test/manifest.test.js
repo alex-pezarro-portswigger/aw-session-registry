@@ -141,7 +141,7 @@ test('every tool and handler has a name/type and a handler function', () => {
 
 test('registry tools and launch reminder are contributed together', () => {
   assert.deepEqual(manifest.tools.map((t) => t.name), [
-    'send_peer_message', 'list_peer_sessions', 'list_repo_sessions', 'update_session_note',
+    'send_remote_peer_message', 'list_remote_peer_sessions', 'list_repo_sessions', 'update_session_note',
   ]);
   assert.deepEqual(manifest.skills, ['session-registry']);
   const skillDir = path.join(dir, 'skills', 'session-registry');
