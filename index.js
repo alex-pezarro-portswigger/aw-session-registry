@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { PeerMessageStore } from './lib/store.js';
-import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from './lib/tools.js';
+import { sendRemotePeerMessageTool, listRemotePeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from './lib/tools.js';
 import { HANDLERS } from './lib/handlers.js';
 import { onArchive, onBeforeDispatch, onDispatch, onPurge, onResume } from './lib/hooks.js';
 import { POSTMASTER_SWEEP, SWEEP_MS } from './lib/sweep.js';
@@ -97,7 +97,7 @@ export default {
     },
   ],
 
-  tools: [sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool],
+  tools: [sendRemotePeerMessageTool, listRemotePeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool],
   skills: ['session-registry'],
   hooks: ['PostToolUse', 'UserPromptSubmit'],
   handlers: HANDLERS,

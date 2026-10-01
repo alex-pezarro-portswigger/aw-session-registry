@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from '../lib/tools.js';
+import { sendRemotePeerMessageTool, listRemotePeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool } from '../lib/tools.js';
 import { PeerMessageStore, MAX_BODY_CHARS } from '../lib/store.js';
 import { _resetRepoKeyCache, _setGitOriginForTests } from '../lib/repo-key.js';
 import { onBeforeDispatch } from '../lib/hooks.js';
@@ -60,14 +60,14 @@ afterEach(() => {
   _setGitNameForTests(null); _resetGitNameCache();
 });
 
-// ── send_peer_message ────────────────────────────────────────────────────────
+// ── send_remote_peer_message ────────────────────────────────────────────────────
 
-test('send_peer_message resolves the caller"s repo, sets fromDisplay from the git name, and logs it outbound', async () => {
+test('send_remote_peer_message resolves the caller"s repo, sets fromDisplay from the git name, and logs it outbound', async () => {
   fakeGit('git@github.com:acme/app.git');
   fakeGitName('Sam Rivera\n');
   const h = harness();
   h.stub(() => ({ json: { message: { id: 'srv-9' } } }));
-  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
+  const res = await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
 
   assert.equal(res.isError, undefined);
   assert.equal(h.calls[0].url, `${BASE}/v1/messages`);
@@ -88,7 +88,7 @@ test('omits fromDisplay entirely when no git name is configured', async () => {
   fakeGitName(null);
   const h = harness();
   h.stub(() => ({ json: { message: { id: 'srv-10' } } }));
-  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
+  const res = await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'peer-card', text: 'ping' });
   assert.equal(res.isError, undefined);
   // Absent, never '': the Go side treats an empty string as a clear.
   assert.equal('fromDisplay' in h.calls[0].body, false);
@@ -99,7 +99,7 @@ test('a caller whose folder is not a git checkout is told that, clearly', async 
   fakeGit(null);
   const h = harness();
   h.stub(() => ({ json: {} }));
-  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x', text: 'y' });
+  const res = await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x', text: 'y' });
   assert.equal(res.isError, true);
   assert.match(text(res), /not a git checkout with an origin remote/);
   assert.equal(h.calls.length, 0);
@@ -108,8 +108,8 @@ test('a caller whose folder is not a git checkout is told that, clearly', async 
 test('an unknown or absent caller is refused rather than sent unattributed', async () => {
   const h = harness();
   h.stub(() => ({ json: {} }));
-  assert.match(text(await sendPeerMessageTool.handler({ host: h.host, caller: null }, { to: 'x', text: 'y' })), /which session is calling/);
-  assert.match(text(await sendPeerMessageTool.handler({ host: h.host, caller: 'ghost' }, { to: 'x', text: 'y' })), /No Agent Wrangler session is registered/);
+  assert.match(text(await sendRemotePeerMessageTool.handler({ host: h.host, caller: null }, { to: 'x', text: 'y' })), /which session is calling/);
+  assert.match(text(await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'ghost' }, { to: 'x', text: 'y' })), /No Agent Wrangler session is registered/);
   assert.equal(h.calls.length, 0);
 });
 
@@ -117,7 +117,7 @@ test('no configured registry URL uses the plugin default', async () => {
   fakeGit('git@github.com:acme/app.git');
   const h = harness({ registryUrl: null });
   h.stub(() => ({ json: {} }));
-  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x', text: 'y' });
+  const res = await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x', text: 'y' });
   assert.equal(res.isError, undefined);
   assert.match(h.calls[0].url, /^https:\/\/session-registry\.platform-dev\.portswigger\.io\//);
 });
@@ -126,10 +126,10 @@ test('missing arguments and messaging yourself are refused before the network', 
   fakeGit('git@github.com:acme/app.git');
   const h = harness();
   h.stub(() => ({ json: {} }));
-  assert.match(text(await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { text: 'y' })), /`to` is required/);
-  assert.match(text(await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x' })), /`text` is required/);
-  assert.match(text(await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: '  ', text: 'y' })), /`to` is required/);
-  assert.match(text(await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'card-1', text: 'y' })), /own handle/);
+  assert.match(text(await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { text: 'y' })), /`to` is required/);
+  assert.match(text(await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'x' })), /`text` is required/);
+  assert.match(text(await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: '  ', text: 'y' })), /`to` is required/);
+  assert.match(text(await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'card-1', text: 'y' })), /own handle/);
   assert.equal(h.calls.length, 0);
 });
 
@@ -139,7 +139,7 @@ test('an over-long body is REFUSED with the limit named, not silently truncated'
   fakeGit('git@github.com:acme/app.git');
   const h = harness();
   h.stub(() => ({ json: {} }));
-  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'p', text: 'x'.repeat(MAX_BODY_CHARS + 1) });
+  const res = await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'p', text: 'x'.repeat(MAX_BODY_CHARS + 1) });
   assert.equal(res.isError, true);
   assert.match(text(res), new RegExp(`${MAX_BODY_CHARS}-character limit`));
   assert.equal(h.calls.length, 0);
@@ -149,16 +149,27 @@ test('a registry failure is reported and NOTHING is logged as sent', async () =>
   fakeGit('git@github.com:acme/app.git');
   const h = harness();
   h.stub(() => ({ status: 503, json: { error: 'redis down' } }));
-  const res = await sendPeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'p', text: 'ping' });
+  const res = await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'p', text: 'ping' });
   assert.equal(res.isError, true);
   assert.match(text(res), /redis down/);
   assert.deepEqual(h.store.threadFor('card-1', 'p'), [], 'a failed send is not in the thread as if it went');
   assert.equal(h.rebuilds(), 0);
 });
 
-// ── list_peer_sessions ───────────────────────────────────────────────────────
+test('send_remote_peer_message refuses a session on this board and points at send_message', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness({ sessions: { 'card-1': { cwd: '/w/app' }, 'card-2': { cwd: '/w/app' } } });
+  h.stub(() => ({ json: {} }));
+  const res = await sendRemotePeerMessageTool.handler({ host: h.host, caller: 'card-1' }, { to: 'card-2', text: 'ping' });
+  assert.equal(res.isError, true);
+  assert.match(text(res), /send_message with to: "card-2"/);
+  assert.equal(h.calls.length, 0, 'nothing goes to the relay');
+  assert.deepEqual(h.store.threadFor('card-1', 'card-2'), []);
+});
 
-test('list_peer_sessions excludes self, finished rows and handle-less rows', async () => {
+// ── list_remote_peer_sessions ───────────────────────────────────────────────────
+
+test('list_remote_peer_sessions excludes self, finished rows and handle-less rows', async () => {
   fakeGit('git@github.com:acme/app.git');
   const h = harness();
   h.stub(() => ({ json: { repo: 'acme/app', sessions: [
@@ -168,7 +179,7 @@ test('list_peer_sessions excludes self, finished rows and handle-less rows', asy
     { sessionId: 'p3', messagingHandle: '', owner: 'No handle', finishedAt: null },
     { sessionId: 'p4', owner: 'Also no handle', finishedAt: null },
   ] } }));
-  const res = await listPeerSessionsTool.handler({ host: h.host, caller: 'card-1' });
+  const res = await listRemotePeerSessionsTool.handler({ host: h.host, caller: 'card-1' });
   assert.equal(h.calls[0].url, `${BASE}/v1/repos/acme/app/sessions`);
   const payload = JSON.parse(text(res));
   assert.deepEqual(payload.peers.map((p) => p.handle), ['peer-a']);
@@ -176,11 +187,23 @@ test('list_peer_sessions excludes self, finished rows and handle-less rows', asy
   assert.equal(payload.repo, 'acme/app');
 });
 
+test('list_remote_peer_sessions leaves out sessions on this board', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness({ sessions: { 'card-1': { cwd: '/w/app' }, 'card-2': { cwd: '/w/app' } } });
+  h.stub(() => ({ json: { sessions: [
+    { messagingHandle: 'card-2', finishedAt: null },
+    { messagingHandle: 'peer-a', finishedAt: null },
+  ] } }));
+  const payload = JSON.parse(text(await listRemotePeerSessionsTool.handler({ host: h.host, caller: 'card-1' })));
+  assert.deepEqual(payload.peers.map((p) => p.handle), ['peer-a']);
+  assert.match(payload.note, /send_message/);
+});
+
 test('a row with no owner is "unattributed", which is a value not a gap', async () => {
   fakeGit('git@github.com:acme/app.git');
   const h = harness();
   h.stub(() => ({ json: { sessions: [{ messagingHandle: 'peer-a', finishedAt: null }] } }));
-  const payload = JSON.parse(text(await listPeerSessionsTool.handler({ host: h.host, caller: 'card-1' })));
+  const payload = JSON.parse(text(await listRemotePeerSessionsTool.handler({ host: h.host, caller: 'card-1' })));
   assert.equal(payload.peers[0].owner, 'unattributed');
 });
 
@@ -190,21 +213,21 @@ test('an empty peer list says there is nobody to message', async () => {
   fakeGit('git@github.com:acme/app.git');
   const h = harness();
   h.stub(() => ({ json: { sessions: [] } }));
-  assert.match(text(await listPeerSessionsTool.handler({ host: h.host, caller: 'card-1' })), /nobody to message/);
+  assert.match(text(await listRemotePeerSessionsTool.handler({ host: h.host, caller: 'card-1' })), /nobody to message/);
 });
 
-test('list_peer_sessions never involves message bodies at all', async () => {
+test('list_remote_peer_sessions never involves message bodies at all', async () => {
   fakeGit('git@github.com:acme/app.git');
   const h = harness();
   h.stub(() => ({ json: { sessions: [{ messagingHandle: 'peer-a', finishedAt: null, detail: 'long detail' }] } }));
-  const payload = JSON.parse(text(await listPeerSessionsTool.handler({ host: h.host, caller: 'card-1' })));
+  const payload = JSON.parse(text(await listRemotePeerSessionsTool.handler({ host: h.host, caller: 'card-1' })));
   assert.deepEqual(Object.keys(payload.peers[0]).sort(), ['branch', 'handle', 'intent', 'origin', 'owner', 'startedAt']);
 });
 
 test('both tools declare a zod-shaped inputSchema the MCP SDK can register', () => {
-  assert.equal(typeof sendPeerMessageTool.inputSchema.to.parse, 'function');
-  assert.equal(typeof sendPeerMessageTool.inputSchema.text.parse, 'function');
-  assert.deepEqual(listPeerSessionsTool.inputSchema, {});
+  assert.equal(typeof sendRemotePeerMessageTool.inputSchema.to.parse, 'function');
+  assert.equal(typeof sendRemotePeerMessageTool.inputSchema.text.parse, 'function');
+  assert.deepEqual(listRemotePeerSessionsTool.inputSchema, {});
 });
 
 test('update_session_note writes only agent-supplied fields to this card', async () => {
@@ -263,4 +286,16 @@ test('list_repo_sessions includes handle-less and finished peers, with filters',
   assert.deepEqual(all.sessions.map((s) => s.sessionId), ['peer-a', 'peer-b']);
   const live = JSON.parse(text(await listRepoSessionsTool.handler({ host: h.host, caller: 'card-1' }, { live_only: true })));
   assert.deepEqual(live.sessions.map((s) => s.sessionId), ['peer-a']);
+});
+
+test('list_repo_sessions flags which peers are on this board', async () => {
+  fakeGit('git@github.com:acme/app.git');
+  const h = harness({ sessions: { 'card-1': { cwd: '/w/app' }, 'card-2': { cwd: '/w/app' } } });
+  h.stub(() => ({ json: { sessions: [
+    { sessionId: 'card-2', messagingHandle: 'card-2' },
+    { sessionId: 'remote', messagingHandle: 'remote' },
+    { sessionId: 'quiet' },
+  ] } }));
+  const payload = JSON.parse(text(await listRepoSessionsTool.handler({ host: h.host, caller: 'card-1' })));
+  assert.deepEqual(payload.sessions.map((s) => [s.sessionId, s.onThisBoard]), [['card-2', true], ['remote', false], ['quiet', false]]);
 });
