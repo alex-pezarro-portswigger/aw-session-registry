@@ -243,7 +243,7 @@ test('purge removes everything for the card', () => {
 });
 
 // Found in verification: without this, an archived card kept its handle on the
-// registry, peers were still offered it by list_peer_sessions, and a send to it
+// registry, peers were still offered it by list_remote_peer_sessions, and a send to it
 // ended up pending on a card nobody was looking at — with no receipts to say so.
 // And it closes the row out: this extension registered it, so it ends it — and
 // a finished row is the only kind the registry can prune under its per-repo cap.

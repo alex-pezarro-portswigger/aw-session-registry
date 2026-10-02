@@ -70,6 +70,7 @@
 .peer-hint { margin: 0; font-size: 11px; line-height: 1.4; color: var(--fg-subtle); }
 
 .peer-channels { display: flex; flex-direction: column; gap: 6px; }
+.peer-channels > summary { cursor: pointer; }
 .peer-channel {
   display: flex; flex-direction: column; gap: 4px;
   padding: 8px; border: 1px solid var(--border-muted); border-radius: 6px;
@@ -190,3 +191,6 @@
 
 .peer-dir-nomatch, .peer-dir-empty { margin: 18px 0 0; font-size: 0.85rem; color: var(--fg-muted); }
 .peer-dir-empty:empty { display: none; }
+
+/* Waiting messages sit below the terminal/chat pane rather than above it. */
+.peer-pending { order: 1; }

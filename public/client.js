@@ -139,14 +139,22 @@ const panelSection = {
   id: 'panel',
   mount(host, api) {
     panelApi = api;
-    host.appendChild(el('div', 'peer-panel'));
+    host.appendChild(el('div', 'peer-panel peer-top'));
+    // Waiting messages and the ack live in their own strip, which the CSS
+    // orders below the terminal (#panel-sections is display: contents, so
+    // both are #sidebar's own flex children).
+    host.appendChild(el('div', 'peer-panel peer-pending'));
   },
   update(host, session, graph) {
-    const root = host.querySelector('.peer-panel');
-    if (!root) return;
+    const root = host.querySelector('.peer-top');
+    const pending = host.querySelector('.peer-pending');
+    if (!root || !pending) return;
     const sessionId = session && session.sessionId;
     const p = peerData(graph);
-    const { messages, channels } = inboxFor(graph, sessionId);
+    const { messages, channels: all } = inboxFor(graph, sessionId);
+    // Only peers you have heard from or made a call about. Sessions you have
+    // merely sent to are the agent's business, not something to decide on.
+    const channels = all.filter((c) => c.blocked || c.allowAll || c.inCount);
 
     const notice = noticeFor(sessionId);
     // Nothing to say and nothing to configure: draw nothing rather than an
@@ -155,6 +163,7 @@ const panelSection = {
     // whole section (and its confirmation) would vanish on the same click.
     if (!sessionId || (!messages.length && !channels.length && !notice && p && p.configured)) {
       root.replaceChildren();
+      pending.replaceChildren();
       return;
     }
 
@@ -164,6 +173,7 @@ const panelSection = {
     if (p && !p.configured) {
       parts.push(el('p', 'peer-note', 'No session registry URL is set, so peer messaging is doing nothing. Set one from the cog on its row in the Extensions tab.'));
       root.replaceChildren(...parts);
+      pending.replaceChildren();
       return;
     }
     if (p && p.registryUp === false) {
@@ -173,12 +183,15 @@ const panelSection = {
       parts.push(el('p', 'peer-note peer-warn', 'There is more waiting than the board will carry at once. Clear some of the backlog to see the rest.'));
     }
 
-    if (notice) parts.push(notice);
+    const below = [];
+    if (notice) below.push(notice);
+    for (const m of messages) below.push(approvalCard(sessionId, m));
+    if (below.length) below.unshift(el('div', 'peer-head', 'Peer messages'));
+    pending.replaceChildren(...below);
 
-    for (const m of messages) parts.push(approvalCard(sessionId, m));
     if (channels.length) parts.push(channelList(sessionId, channels));
-
-    root.replaceChildren(...parts);
+    // The heading alone is not worth a strip above the terminal.
+    root.replaceChildren(...(parts.length > 1 ? parts : []));
   },
   unmount() {
     panelApi = null;
@@ -249,9 +262,15 @@ function approvalCard(sessionId, m) {
   return card;
 }
 
+let channelsOpen = false;
+
 function channelList(sessionId, channels) {
-  const box = el('div', 'peer-channels');
-  box.appendChild(el('div', 'peer-subhead', 'Sessions you have decided about'));
+  // Collapsed by default. The graph tick redraws the panel, so the open state
+  // is kept here rather than on the element, or every tick would shut it.
+  const box = el('details', 'peer-channels');
+  box.open = channelsOpen;
+  box.addEventListener('toggle', () => { channelsOpen = box.open; });
+  box.appendChild(el('summary', 'peer-subhead', `Peer sessions (${channels.length})`));
   for (const c of channels) {
     const row = el('div', 'peer-channel');
     const who = el('div', 'peer-channel-who');
@@ -271,7 +290,6 @@ function channelList(sessionId, channels) {
     }
     const seen = [];
     if (c.inCount) seen.push(`${c.inCount} in`);
-    if (c.outCount) seen.push(`${c.outCount} out`);
     if (seen.length) state.appendChild(el('span', 'peer-seen', seen.join(' · ')));
     row.appendChild(state);
 

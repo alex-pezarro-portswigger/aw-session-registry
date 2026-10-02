@@ -36,7 +36,7 @@ test('native prompt hook gives the brief once and reminds at most three times', 
   const first = JSON.parse(await run({ env, cwd })).hookSpecificOutput;
   assert.equal(first.hookEventName, 'UserPromptSubmit');
   assert.match(first.additionalContext, /2 other sessions on acme\/app/);
-  assert.match(first.additionalContext, /send_peer_message to "peer-card"/);
+  assert.match(first.additionalContext, /send_message \(if on your board\) or send_remote_peer_message to "peer-card"/);
   assert.doesNotMatch(first.additionalContext, /ListAgents|SendMessage to/);
   assert.match(first.additionalContext, /update_session_note/);
   assert.match(JSON.parse(await run({ env, cwd })).hookSpecificOutput.additionalContext, /update_session_note/);
@@ -47,6 +47,20 @@ test('native prompt hook gives the brief once and reminds at most three times', 
   assert.equal(calls[0].body.sessionId, 'card-1');
   assert.equal(calls[0].body.gitOriginUrl, 'git@github.com:acme/app.git');
   assert.equal(calls[0].body.onlyIfUnbriefed, true);
+});
+
+test('native brief names send_message for board sessions and the remote tool for the rest', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'peer-native-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = checkout(root);
+  fs.writeFileSync(path.join(root, 'mappings.json'), JSON.stringify({ 'local-card': { cwd } }));
+  const env = { AW_SESSION_ID: 'card-4', AW_TASK_MEMORY: path.join(root, 'memory.md'), AW_DATA_DIR: root };
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ hookSpecificOutput: {
+    additionalContext: '2 other sessions on acme/app\n    SendMessage to "local-card"\n    SendMessage to "far-card"',
+  } }) });
+  const context = JSON.parse(await run({ env, cwd })).hookSpecificOutput.additionalContext;
+  assert.match(context, /^ {4}send_message to "local-card"$/m);
+  assert.match(context, /^ {4}send_remote_peer_message to "far-card"$/m);
 });
 
 test('PostToolUse marker stops later native prompt reminders', async (t) => {
