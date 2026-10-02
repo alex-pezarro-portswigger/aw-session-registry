@@ -18,7 +18,6 @@
     "description": "Lets Agent Wrangler sessions working in the same repo inform each other of what they are doing, and send each other messages.",
     "author": "Alex Pezarro <alex.pezarro@portswigger.net>",
     "homepage": "https://github.com/alex-pezarro-portswigger/aw-session-registry",
-    "requires": ["deliver", "sessions:read", "board:rebuild", "board:broadcast"],
-    "hooks": ["PostToolUse", "UserPromptSubmit"]
+    "requires": ["deliver", "sessions:read", "board:rebuild", "board:broadcast"]
   }
 }

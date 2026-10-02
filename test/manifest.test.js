@@ -89,7 +89,7 @@ test('sessions:wake is deliberately absent — host.deliver already wakes a targ
   assert.equal(manifest.requires.includes('sessions:wake'), false);
 });
 
-test('the declared host API range covers declarative native hooks', () => {
+test('the declared host API range is the 1.12.0 floor', () => {
   assert.equal(manifest.engines.wranglerApi, '^1.12.0');
   assert.ok(fs.readFileSync(path.join(ROOT, 'public/client.js'), 'utf8').includes('onMessage'));
 });
@@ -147,8 +147,10 @@ test('registry tools and launch reminder are contributed together', () => {
   const skillDir = path.join(dir, 'skills', 'session-registry');
   assert.match(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /^---\nname: session-registry\n/);
   const native = JSON.parse(fs.readFileSync(path.join(skillDir, 'hooks', 'hooks.json'), 'utf8'));
-  assert.deepEqual(Object.keys(native.hooks).sort(), manifest.hooks.slice().sort());
-  assert.deepEqual(manifest.hooks, pkg.wranglerExtension.hooks);
+  assert.deepEqual(Object.keys(native.hooks).sort(), ['PostToolUse', 'UserPromptSubmit']);
+  // `hooks` on the manifest is the host's value-hook object; an array there quarantines us.
+  assert.equal(manifest.hooks, undefined);
+  assert.equal(pkg.wranglerExtension.hooks, undefined);
 });
 
 test('every session hook is a known name and a function', () => {

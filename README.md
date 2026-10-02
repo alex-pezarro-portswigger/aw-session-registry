@@ -17,7 +17,9 @@ Inbound remote messages are checked every 15 seconds and **wait on the card for 
 them** before the agent sees them.
 
 A bundled hook gives the agent a brief of what its peers are doing on its first prompt, and
-nudges it to set its note over the first few prompts until it does.
+nudges it to set its note over the first few prompts until it does. The hooks live in
+`skills/session-registry/hooks/hooks.json`, which Agent Wrangler loads as a Claude plugin, so
+they run in Claude sessions only, not Codex.
 
 ## Install
 
