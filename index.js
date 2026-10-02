@@ -47,7 +47,8 @@ export default {
   // which is the honest end state rather than a surprise.
   defaultEnabled: false,
 
-  // Native extension skill hooks arrived in 1.12.0.
+  // 1.12.0 is the floor this was written against. The native skill hooks need
+  // nothing from the host: Claude loads the skill dir as a plugin.
   engines: { wranglerApi: '^1.12.0' },
 
   // Four capabilities, and the list is DISCLOSURE, not a sandbox: this
@@ -100,7 +101,6 @@ export default {
 
   tools: [sendPeerMessageTool, listPeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool],
   skills: ['session-registry'],
-  hooks: ['PostToolUse', 'UserPromptSubmit'],
   handlers: HANDLERS,
   session: { onBeforeDispatch, onDispatch, onResume, onArchive, onPurge },
   sweeps: [POSTMASTER_SWEEP],
