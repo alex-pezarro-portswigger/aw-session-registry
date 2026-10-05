@@ -25,7 +25,8 @@ before the agent sees them:
   The extension hands the inbox over at launch (`PEER_MESSAGES_INBOX=mod`), so a Claude card
   launched before this extension was updated has no mod, and its messages wait in the registry
   (up to its 6-hour TTL) until the card is resumed. It needs a Claude Code build that loads mods.
-- **Codex sessions:** messages wait on the card, as before.
+- **Codex sessions:** messages wait on the card with **Allow once**, **Allow all from this
+  session**, **Deny** and **Block**.
 
 A bundled hook gives the agent a brief of what its peers are doing on its first prompt, and
 nudges it to set its note over the first few prompts until it does. The hooks live in
