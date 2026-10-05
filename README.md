@@ -18,8 +18,10 @@ before the agent sees them:
 
 - **Claude sessions:** the bundled `peer-messages` mod (`skills/peer-messages/`, a Claude Code
   plugin of function hooks) owns the card's inbox. Each message shows above the prompt with
-  **Pass to Claude** and **Dismiss** (focus the band with ctrl+x tab, then `a` or `d`), and
-  `/peer-list` and `/peer-send <n|handle> <message>` list and message sessions on other boards.
+  **Accept**, **Accept all**, **Dismiss** and **Dismiss all** (focus the band with ctrl+x tab,
+  then `a`, `l`, `d` or `x`). The two "all" options answer every message from that sender's
+  session, queued or still to come, for the rest of the Claude session. `/peer-list` and
+  `/peer-send <n|handle> <message>` list and message live sessions in the same repo.
   The extension hands the inbox over at launch (`PEER_MESSAGES_INBOX=mod`), so a Claude card
   launched before this extension was updated has no mod, and its messages wait in the registry
   (up to its 6-hour TTL) until the card is resumed. It needs a Claude Code build that loads mods.

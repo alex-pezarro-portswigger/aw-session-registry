@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Me, Message, Peer } from '../types'
+import type { Me, Message, Peer, Rule } from '../types'
 
 const DEFAULT_URL = 'https://session-registry.platform-dev.portswigger.io'
 const POLL_MS = 15_000
@@ -9,6 +9,8 @@ const POLL_MS = 15_000
 const me = atom({ plugin: 'peer-messages', key: 'me' } as const, null)
 const inbox = atom({ plugin: 'peer-messages', key: 'inbox' } as const, [])
 const peers = atom({ plugin: 'peer-messages', key: 'peers' } as const, [])
+// sender session id → what to do with its messages without asking, for this session
+const rules = atom({ plugin: 'peer-messages', key: 'rules' } as const, {})
 
 // Mirrors cod-session-registry's repokey.FromOriginURL + Normalise.
 export function repoKeyFromOrigin(raw: string): string | null {
@@ -55,6 +57,18 @@ export function livePeers(repos: Record<string, Entry[]>, self: { repo: string; 
     }
   }
   return out
+}
+
+// Which arrivals a standing Accept all / Dismiss all already answers, and which wait in the band.
+export function triage(got: readonly Message[], standing: Readonly<Record<string, Rule>>) {
+  const accept: Message[] = []
+  const dismiss: Message[] = []
+  const ask: Message[] = []
+  for (const m of got) {
+    const rule = standing[m.fromHandle]
+    ;(rule === 'accept' ? accept : rule === 'dismiss' ? dismiss : ask).push(m)
+  }
+  return { accept, dismiss, ask }
 }
 
 // "<n|handle> <message>" → target + body
@@ -173,33 +187,48 @@ async function poll($: EngineInterface) {
     if (!res.ok) return
     const got = (JSON.parse(res.text) as { messages?: Message[] }).messages ?? []
     if (got.length === 0) return
-    await update($, inbox, list => {
-      const seen = new Set(list.map(m => m.id))
-      return [...list, ...got.filter(m => !seen.has(m.id))]
-    })
+    const queued = new Set((await read($, inbox)).map(m => m.id))
+    const { accept, dismiss, ask } = triage(got.filter(m => !queued.has(m.id)), await read($, rules))
+    if (ask.length) await update($, inbox, list => [...list, ...ask.filter(m => !list.some(q => q.id === m.id))])
+    if (dismiss.length) await ack($, dismiss.map(m => m.id))
+    if (accept.length) await deliver($, accept)
   } catch {
     // offline or off the allowlist: try again next tick
   }
 }
 
-async function ack($: EngineInterface, id: string) {
+async function ack($: EngineInterface, ids: string[]) {
   const self = await read($, me)
-  await update($, inbox, list => list.filter(m => m.id !== id))
+  await update($, inbox, list => list.filter(m => !ids.includes(m.id)))
   if (!self) return
   try {
-    await post($, `${self.url}/v1/messages/ack`, { repo: self.repo, handle: self.handle, ids: [id] })
+    await post($, `${self.url}/v1/messages/ack`, { repo: self.repo, handle: self.handle, ids })
   } catch {
     // unacked messages expire after 6h on the server
   }
 }
 
+// One turn for the lot, so Accept all does not queue a turn per message.
+async function deliver($: EngineInterface, msgs: Message[]) {
+  await ack($, msgs.map(m => m.id))
+  const at = Date.now()
+  void $.prompt.submit({ text: msgs.map(m => framePeerMessage(m, at)).join('\n\n') })
+}
+
+async function answer($: EngineInterface, m: Message, choice: Rule, all: boolean) {
+  const from = all ? (await read($, inbox)).filter(q => q.fromHandle === m.fromHandle) : [m]
+  if (all) await update($, rules, r => ({ ...r, [m.fromHandle]: choice }))
+  if (choice === 'accept') await deliver($, from)
+  else await ack($, from.map(q => q.id))
+}
+
 async function refreshPeers($: EngineInterface): Promise<Peer[] | string> {
   const self = await read($, me)
   if (!self) return 'peer-messages: this session has no git remote the registry can key on.'
-  const res = await $.http.fetch(`${self.url}/v1/sessions?live=true`)
+  const res = await $.http.fetch(`${self.url}/v1/repos/${self.repo}/sessions?live=true`)
   if (!res.ok) return `peer-messages: registry answered ${res.status}.`
-  const repos = (JSON.parse(res.text) as { repos?: Record<string, Entry[]> }).repos ?? {}
-  const list = livePeers(repos, self)
+  const sessions = (JSON.parse(res.text) as { sessions?: Entry[] }).sessions ?? []
+  const list = livePeers({ [self.repo]: sessions }, self)
   await update($, peers, () => list)
   return list
 }
@@ -207,7 +236,7 @@ async function refreshPeers($: EngineInterface): Promise<Peer[] | string> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    await $.command.register({ name: 'peer-list', description: 'List live sessions you can message' })
+    await $.command.register({ name: 'peer-list', description: 'List live sessions in this repo you can message' })
     await $.command.register({
       name: 'peer-send',
       description: 'Message another session through the session registry',
@@ -237,7 +266,7 @@ export const register: Register = on => {
   on('command.run', { command: 'peer-list' }, async $ => {
     const list = await refreshPeers($).catch(() => 'peer-messages: could not reach the session registry.')
     if (typeof list === 'string') return { text: list }
-    if (list.length === 0) return { text: 'No other live sessions with a messaging handle.' }
+    if (list.length === 0) return { text: 'No other live sessions in this repo with a messaging handle.' }
     const rows = list.map(
       (p, i) => `${i + 1}. ${p.owner} · ${p.repo}${p.branch ? ` (${p.branch})` : ''}${p.intent ? ` — ${p.intent}` : ''}`,
     )
@@ -247,7 +276,13 @@ export const register: Register = on => {
   on('command.run', { command: 'peer-send' }, async ($, e) => {
     const self = await read($, me)
     if (!self) return { text: 'peer-messages: this session has no git remote the registry can key on.' }
-    const parsed = parseSend(e.args, await read($, peers))
+    let parsed = parseSend(e.args, await read($, peers))
+    // A handle that went live since the last /peer-list is not in the snapshot yet. A
+    // number stays on the snapshot, so it still means the row the person saw.
+    if ('error' in parsed && !/^\s*\d+\s/.test(e.args)) {
+      const fresh = await refreshPeers($).catch(() => null)
+      if (Array.isArray(fresh)) parsed = parseSend(e.args, fresh)
+    }
     if ('error' in parsed) return { text: parsed.error }
     try {
       const res = await post($, `${self.url}/v1/messages`, {
@@ -277,22 +312,17 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Text bold>
-          📨 {m.fromDisplay || 'Unknown'} <Text dimColor>({m.fromRepo}) · unverified sender{more}</Text>
+          📨 {m.fromDisplay || 'Unknown'} <Text dimColor>({m.fromRepo}){more}</Text>
         </Text>
         <Text wrap="truncate-end">{m.body}</Text>
         <Box flexDirection="row">
-          <Button
-            key="accept"
-            label="Pass to Claude"
-            hotkey="a"
-            variant="primary"
-            onPress={async () => {
-              await ack($, m.id)
-              void $.prompt.submit({ text: framePeerMessage(m, Date.now()) })
-            }}
-          />
+          <Button key="accept" label="Accept" hotkey="a" variant="primary" onPress={() => answer($, m, 'accept', false)} />
           <Text> </Text>
-          <Button key="dismiss" label="Dismiss" hotkey="d" onPress={() => ack($, m.id)} />
+          <Button key="accept-all" label="Accept all" hotkey="l" onPress={() => answer($, m, 'accept', true)} />
+          <Text> </Text>
+          <Button key="dismiss" label="Dismiss" hotkey="d" onPress={() => answer($, m, 'dismiss', false)} />
+          <Text> </Text>
+          <Button key="dismiss-all" label="Dismiss all" hotkey="x" onPress={() => answer($, m, 'dismiss', true)} />
         </Box>
         {below}
       </Box>

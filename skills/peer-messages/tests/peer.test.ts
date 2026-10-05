@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { END_MARKER, framePeerMessage, livePeers, modeFor, parseSend, repoKeyFromOrigin } from '../hooks/register'
+import { END_MARKER, framePeerMessage, livePeers, modeFor, parseSend, repoKeyFromOrigin, triage } from '../hooks/register'
 
 describe('peer-messages', () => {
   test('repo key matches the registry', async () => {
@@ -32,6 +32,16 @@ describe('peer-messages', () => {
     expect(parseSend('h1 hi', peers)).toEqual({ peer: peers[0]!, body: 'hi' })
     expect('error' in parseSend('2 hi', peers)).toBe(true)
     expect('error' in parseSend('1', peers)).toBe(true)
+  })
+
+  test('standing answers are keyed on the sender session', async () => {
+    const msg = (id: string, fromHandle: string) => ({
+      id, fromRepo: 'a/b', fromHandle, fromOwnerKey: '', fromDisplay: 'Sam', toRepo: 'a/b', toHandle: 'me', body: 'hi', createdAt: '',
+    })
+    const { accept, dismiss, ask } = triage([msg('1', 'yes'), msg('2', 'no'), msg('3', 'new'), msg('4', 'yes')], { yes: 'accept', no: 'dismiss' })
+    expect(accept.map(m => m.id)).toEqual(['1', '4'])
+    expect(dismiss.map(m => m.id)).toEqual(['2'])
+    expect(ask.map(m => m.id)).toEqual(['3'])
   })
 
   test('frames the body as untrusted, like lib/framing.js', async () => {
