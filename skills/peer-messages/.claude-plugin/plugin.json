@@ -1,0 +1,7 @@
+{
+  "name": "peer-messages",
+  "version": "0.1.0",
+  "description": "Receive, approve and send session-registry peer messages inside the Claude Code session",
+  "author": { "name": "Alex Pezarro", "email": "alex.pezarro@portswigger.net" },
+  "types": "./types/index.d.ts"
+}

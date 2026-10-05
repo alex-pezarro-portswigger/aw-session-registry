@@ -11,6 +11,11 @@
 // whatever a sender asserted about itself and verifies none of it. There is no
 // `esc()` anywhere in this file and no `innerHTML` assignment carrying data.
 //
+// This card flow is the Codex one. A Claude card's inbox belongs to the
+// peer-messages mod (lib/launch-context.js), so the sweep never fills its
+// pending list; it only shows here for a message or channel decision that
+// predates the handover.
+//
 // NO ENTER-TO-APPROVE, for the same reason the install consent modal has none:
 // approving puts text a stranger wrote into an agent's context.
 //

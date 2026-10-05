@@ -10,7 +10,7 @@
     "zod": "^3.25.76"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test 'test/**/*.test.js'"
   },
   "wranglerExtension": {
     "id": "peer-messaging",

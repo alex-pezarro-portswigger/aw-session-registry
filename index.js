@@ -6,6 +6,7 @@ import { HANDLERS } from './lib/handlers.js';
 import { onArchive, onBeforeDispatch, onDispatch, onPurge, onResume } from './lib/hooks.js';
 import { POSTMASTER_SWEEP, SWEEP_MS } from './lib/sweep.js';
 import { peerMessagingGraph } from './lib/graph.js';
+import { launchContext } from './lib/launch-context.js';
 
 // The manifest. `dir` is exported from import.meta.url because the wrangler
 // resolves `client`/`styles` against it and refuses either if it is absent.
@@ -31,8 +32,9 @@ export default {
   // direction of the flip; a static sentence here cannot, and a blanket "takes
   // effect after a restart" would simply be false.
   help: 'Lets Agent Wrangler sessions working in the same repo send each other short messages, '
-    + 'relayed by the session registry. Every inbound message waits on its card for you to approve '
-    + 'it before the agent sees it — except from a session you have explicitly allowed. Your '
+    + 'relayed by the session registry. Every inbound message waits for you to approve it before the '
+    + 'agent sees it: above the prompt in a Claude session, on the card for Codex — except, on the '
+    + 'card, from a session you have explicitly allowed. Your '
     + 'approvals, the messages still waiting and the log of what was delivered are kept in this '
     + 'extension\'s own file and survive being switched off.',
 
@@ -46,9 +48,11 @@ export default {
   // which is the honest end state rather than a surprise.
   defaultEnabled: false,
 
-  // 1.12.0 is the floor this was written against. The native skill hooks need
-  // nothing from the host: Claude loads the skill dir as a plugin.
-  engines: { wranglerApi: '^1.12.0' },
+  // 1.17.0 is the floor: the `hooks` object and its `session.launchContext`
+  // hook, which hands a Claude card's inbox to the peer-messages mod. The native
+  // skill hooks and the mod need nothing from the host: Claude loads each skill
+  // dir as a plugin.
+  engines: { wranglerApi: '^1.17.0' },
 
   // Four capabilities, and the list is DISCLOSURE, not a sandbox: this
   // extension runs in-process with full access to the machine, and nothing
@@ -99,7 +103,11 @@ export default {
   ],
 
   tools: [sendRemotePeerMessageTool, listRemotePeerSessionsTool, listRepoSessionsTool, updateSessionNoteTool],
-  skills: ['session-registry'],
+  // `peer-messages` is a Claude Code mod (a plugin of function hooks): it owns a
+  // Claude card's inbox, approval and delivery in-session. Codex cards keep the
+  // card flow below.
+  skills: ['session-registry', 'peer-messages'],
+  hooks: { 'session.launchContext': launchContext },
   handlers: HANDLERS,
   session: { onBeforeDispatch, onDispatch, onResume, onArchive, onPurge },
   sweeps: [POSTMASTER_SWEEP],
