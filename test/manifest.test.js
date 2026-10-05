@@ -89,8 +89,8 @@ test('sessions:wake is deliberately absent — host.deliver already wakes a targ
   assert.equal(manifest.requires.includes('sessions:wake'), false);
 });
 
-test('the declared host API range is the 1.12.0 floor', () => {
-  assert.equal(manifest.engines.wranglerApi, '^1.12.0');
+test('the declared host API range is the 1.17.0 floor (the hooks object)', () => {
+  assert.equal(manifest.engines.wranglerApi, '^1.17.0');
   assert.ok(fs.readFileSync(path.join(ROOT, 'public/client.js'), 'utf8').includes('onMessage'));
 });
 
@@ -143,14 +143,26 @@ test('registry tools and launch reminder are contributed together', () => {
   assert.deepEqual(manifest.tools.map((t) => t.name), [
     'send_remote_peer_message', 'list_remote_peer_sessions', 'list_repo_sessions', 'update_session_note',
   ]);
-  assert.deepEqual(manifest.skills, ['session-registry']);
+  assert.deepEqual(manifest.skills, ['session-registry', 'peer-messages']);
   const skillDir = path.join(dir, 'skills', 'session-registry');
   assert.match(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /^---\nname: session-registry\n/);
   const native = JSON.parse(fs.readFileSync(path.join(skillDir, 'hooks', 'hooks.json'), 'utf8'));
   assert.deepEqual(Object.keys(native.hooks).sort(), ['PostToolUse', 'UserPromptSubmit']);
   // `hooks` on the manifest is the host's value-hook object; an array there quarantines us.
-  assert.equal(manifest.hooks, undefined);
+  assert.ok(manifest.hooks && !Array.isArray(manifest.hooks));
+  assert.deepEqual(Object.keys(manifest.hooks), ['session.launchContext']);
+  assert.equal(typeof manifest.hooks['session.launchContext'], 'function');
   assert.equal(pkg.wranglerExtension.hooks, undefined);
+});
+
+test('the peer-messages skill dir is a Claude Code mod', () => {
+  const modDir = path.join(dir, 'skills', 'peer-messages');
+  assert.match(fs.readFileSync(path.join(modDir, 'SKILL.md'), 'utf8'), /^---\nname: peer-messages\n/);
+  const plugin = JSON.parse(fs.readFileSync(path.join(modDir, '.claude-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(plugin.name, 'peer-messages');
+  const hooks = JSON.parse(fs.readFileSync(path.join(modDir, 'hooks', 'hooks.json'), 'utf8'));
+  assert.deepEqual(hooks, { modules: ['./register.tsx'] });
+  assert.ok(fs.existsSync(path.join(modDir, 'hooks', 'register.tsx')));
 });
 
 test('every session hook is a known name and a function', () => {

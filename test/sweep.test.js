@@ -121,6 +121,29 @@ test('one batched drain per repo, whatever the number of cards in it', async () 
   assert.ok(drains.some((c) => c.includes('repo=acme%2Fother') && c.includes('handles=card-3')));
 });
 
+// ── The peer-messages mod owns a Claude card's inbox ─────────────────────────
+
+test('a Claude card is never drained here: the mod in its session owns the queue', async () => {
+  const h = harness({ sessions: [
+    { sessionId: 'card-1', cwd: '/w/app', agent: 'claude' },
+    { sessionId: 'card-2', cwd: '/w/app', agent: 'codex' },
+  ] });
+  h.stub(() => ({ json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  const drains = h.calls.filter((c) => c.startsWith('GET /v1/messages'));
+  assert.equal(drains.length, 1);
+  assert.ok(drains[0].includes('handle') && drains[0].includes('card-2'));
+  assert.ok(!drains[0].includes('card-1'), 'the Claude card is left to its mod');
+});
+
+test('a repo of only Claude cards costs no drain, but its handles are still re-asserted', async () => {
+  const h = harness({ sessions: [{ sessionId: 'card-1', cwd: '/w/app', agent: 'claude' }] });
+  h.stub(() => ({ json: { messages: [] } }));
+  await postmaster({ host: h.host, now: 0, repoKey: h.repoKey });
+  assert.equal(h.calls.filter((c) => c.startsWith('GET /v1/messages')).length, 0);
+  assert.ok(h.calls.includes('POST /v1/sessions/card-1/note'), 'the extension still owns the row');
+});
+
 test('a drained message lands in pending, is NOT delivered, and rebuilds', async () => {
   const h = harness();
   h.stub(() => ({ json: { messages: [envelope()] } }));

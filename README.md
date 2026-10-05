@@ -13,8 +13,17 @@ get these MCP tools:
   boards**. Sessions on your own board use Agent Wrangler's built-in `send_message`, and the
   remote tools refuse them.
 
-Inbound remote messages are checked every 15 seconds and **wait on the card for you to approve
-them** before the agent sees them.
+Inbound remote messages are checked every 15 seconds and **wait for you to approve them**
+before the agent sees them:
+
+- **Claude sessions:** the bundled `peer-messages` mod (`skills/peer-messages/`, a Claude Code
+  plugin of function hooks) owns the card's inbox. Each message shows above the prompt with
+  **Pass to Claude** and **Dismiss** (focus the band with ctrl+x tab, then `a` or `d`), and
+  `/peer-list` and `/peer-send <n|handle> <message>` list and message sessions on other boards.
+  The extension hands the inbox over at launch (`PEER_MESSAGES_INBOX=mod`), so a Claude card
+  launched before this extension was updated has no mod, and its messages wait in the registry
+  (up to its 6-hour TTL) until the card is resumed. It needs a Claude Code build that loads mods.
+- **Codex sessions:** messages wait on the card, as before.
 
 A bundled hook gives the agent a brief of what its peers are doing on its first prompt, and
 nudges it to set its note over the first few prompts until it does. The hooks live in
